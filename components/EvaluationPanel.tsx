@@ -119,9 +119,11 @@ export function EvaluationPanel({
       onChange?.();
       toast({
         title: "Evaluation complete",
-        description: `Faithfulness ${
+        description: `F ${
           report.composite.faithfulness?.toFixed(2) ?? "—"
-        } · Quality ${report.composite.quality?.toFixed(2) ?? "—"}`,
+        } · Q ${report.composite.quality?.toFixed(2) ?? "—"} · T ${
+          report.composite.texture?.toFixed(2) ?? "—"
+        }`,
         variant: "success",
       });
     } catch (err) {
@@ -164,7 +166,7 @@ export function EvaluationPanel({
       onClose={onClose}
       className="max-w-5xl"
       title="Turn-based evaluation"
-      description="Score this transcript against the Card-Faithfulness + Session-Quality rubric using a strong judge model."
+      description="Score this transcript on Card Faithfulness, Session Quality, Emotional Texture, and Narrative Craft. Detects A6 (resolution avoidance) and B6 (internal-consistency) failure flags."
     >
       <div className="grid max-h-[80vh] gap-5 overflow-hidden md:grid-cols-[260px_1fr]">
         {/* Sidebar: controls + history */}
@@ -334,6 +336,8 @@ function HistoryList({
       <ul className="space-y-1.5">
         {history.map((r) => {
           const active = r.id === activeId;
+          const a6 = r.flags.A6_resolutionAvoidance.triggered;
+          const b6 = r.flags.B6_internalConsistency?.triggered ?? false;
           return (
             <li
               key={r.id}
@@ -350,16 +354,25 @@ function HistoryList({
               >
                 <div className="flex items-center gap-1.5 text-foreground">
                   <ModelBadge modelId={r.judgeModel} />
-                  {r.flags.A6_resolutionAvoidance.triggered && (
+                  {a6 && (
                     <Badge variant="destructive" className="px-1 py-0 text-[9px]">
                       A6
+                    </Badge>
+                  )}
+                  {b6 && (
+                    <Badge
+                      variant="outline"
+                      className="border-amber-500/40 bg-amber-500/10 px-1 py-0 text-[9px] text-amber-200"
+                    >
+                      B6
                     </Badge>
                   )}
                 </div>
                 <div className="flex w-full items-center justify-between gap-2 text-[10px] text-muted-foreground">
                   <span>
                     F{r.composite.faithfulness?.toFixed(1) ?? "—"} · Q
-                    {r.composite.quality?.toFixed(1) ?? "—"}
+                    {r.composite.quality?.toFixed(1) ?? "—"} · T
+                    {r.composite.texture?.toFixed(1) ?? "—"}
                   </span>
                   <span>{formatRelativeTime(r.createdAt)}</span>
                 </div>
@@ -421,7 +434,9 @@ function EmptyState({
       <div>
         <h4 className="text-sm font-semibold">No evaluations yet for this session</h4>
         <p className="mt-1 max-w-sm text-xs text-muted-foreground">
-          Run the judge to score this transcript on Card-Faithfulness (Cluster A) and Session-Quality (Cluster B). The judge cites verbatim quotes per dimension.
+          Run the judge to score this transcript across Cluster A (faithfulness),
+          Cluster B (quality), Cluster C+D (texture), plus A6 / B6 binary flags.
+          The judge cites verbatim quotes per dimension.
         </p>
       </div>
       {!tooShort && hasKey && (
@@ -445,14 +460,27 @@ export function EvaluationBadge({
   report: EvaluationReport | undefined;
 }) {
   if (!report) return null;
+  const a6 = report.flags.A6_resolutionAvoidance.triggered;
+  const b6 = report.flags.B6_internalConsistency?.triggered ?? false;
   return (
-    <Badge
-      variant={report.flags.A6_resolutionAvoidance.triggered ? "destructive" : "outline"}
-      className="text-[10px]"
-    >
-      F{report.composite.faithfulness?.toFixed(1) ?? "—"} · Q
-      {report.composite.quality?.toFixed(1) ?? "—"}
-    </Badge>
+    <div className="flex items-center gap-1">
+      <Badge
+        variant={a6 ? "destructive" : "outline"}
+        className="text-[10px]"
+      >
+        F{report.composite.faithfulness?.toFixed(1) ?? "—"} · Q
+        {report.composite.quality?.toFixed(1) ?? "—"} · T
+        {report.composite.texture?.toFixed(1) ?? "—"}
+      </Badge>
+      {b6 && !a6 && (
+        <Badge
+          variant="outline"
+          className="border-amber-500/40 bg-amber-500/10 text-amber-200 text-[10px]"
+        >
+          B6
+        </Badge>
+      )}
+    </div>
   );
 }
 

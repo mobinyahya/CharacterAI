@@ -121,6 +121,7 @@ export async function streamCompletion({
   const decoder = new TextDecoder();
   let buffer = "";
   let full = "";
+  let sawAnyChunk = false;
 
   while (true) {
     const { value, done } = await reader.read();
@@ -139,23 +140,53 @@ export async function streamCompletion({
         if (!trimmed.startsWith("data:")) continue;
         const data = trimmed.slice(5).trim();
         if (!data || data === "[DONE]") continue;
+        let json: unknown;
         try {
-          const json = JSON.parse(data);
-          const delta: string =
-            json?.choices?.[0]?.delta?.content ??
-            json?.choices?.[0]?.message?.content ??
-            "";
-          if (delta) {
-            full += delta;
-            onChunk?.(delta, full);
-          }
+          json = JSON.parse(data);
         } catch {
           // Sometimes OpenRouter sends keep-alive comments; ignore parse errors.
+          continue;
+        }
+        // OpenRouter (especially on `:free` models) sometimes returns 200 OK
+        // and then embeds the upstream error inside the SSE stream rather than
+        // as an HTTP error. Surface those instead of silently emitting "".
+        const errObj = (json as { error?: { message?: string; code?: number } })
+          ?.error;
+        if (errObj) {
+          const status =
+            typeof errObj.code === "number" ? errObj.code : res.status;
+          throw classifyHttpError(status, json);
+        }
+        sawAnyChunk = true;
+        const delta: string =
+          (json as {
+            choices?: { delta?: { content?: string }; message?: { content?: string } }[];
+          })?.choices?.[0]?.delta?.content ??
+          (json as {
+            choices?: { delta?: { content?: string }; message?: { content?: string } }[];
+          })?.choices?.[0]?.message?.content ??
+          "";
+        if (delta) {
+          full += delta;
+          onChunk?.(delta, full);
         }
       }
 
       sepIdx = buffer.indexOf("\n\n");
     }
+  }
+
+  // Some free-tier providers (notably the upstream behind `google/gemma-4-26b-a4b-it:free`)
+  // close the stream cleanly with no data when they're rate-limited or overloaded,
+  // which would otherwise persist as an empty assistant turn and look like a UI freeze.
+  if (full.length === 0) {
+    throw new OpenRouterError(
+      sawAnyChunk
+        ? "Model returned an empty response. The provider may be overloaded or refused the request."
+        : "Provider returned no tokens. This commonly happens on `:free` models when the daily/per-minute rate limit has been hit. Try a different model or wait and retry.",
+      0,
+      "empty_response",
+    );
   }
 
   onDone?.(full);

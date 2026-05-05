@@ -35,7 +35,10 @@ export interface AutopilotSessionOptions {
   character: CharacterCard;
   persona: UserPersona;
   apiKey: string;
-  model: string;
+  /** LLM that generates the USER side (driven by the persona prompt). */
+  userModel: string;
+  /** LLM that generates the CHARACTER side (driven by the card). */
+  characterModel: string;
   turns: number;
   preset?: PromptPreset;
   promptConfig?: SessionPromptConfig;
@@ -48,7 +51,8 @@ interface SingleTurnArgs {
   character: CharacterCard;
   persona: UserPersona;
   apiKey: string;
-  model: string;
+  userModel: string;
+  characterModel: string;
   turnIndex: number;
   preset?: PromptPreset;
   promptConfig?: SessionPromptConfig;
@@ -87,7 +91,8 @@ export async function runAutopilotTurn(
     character,
     persona,
     apiKey,
-    model,
+    userModel,
+    characterModel,
     preset,
     promptConfig,
     signal,
@@ -98,7 +103,7 @@ export async function runAutopilotTurn(
   cb.onTurnStart?.(turnIndex, "user");
   const personaPayload = buildPersonaRequestMessages(persona, character, current);
   const userText = await streamCompletion({
-    model,
+    model: userModel,
     apiKey,
     messages: personaPayload,
     signal,
@@ -120,7 +125,7 @@ export async function runAutopilotTurn(
     promptConfig,
   });
   const charText = await streamCompletion({
-    model,
+    model: characterModel,
     apiKey,
     messages: charPayload,
     signal,
@@ -151,7 +156,8 @@ export async function runAutopilotSession(
     character,
     persona,
     apiKey,
-    model,
+    userModel,
+    characterModel,
     turns,
     preset,
     promptConfig,
@@ -172,7 +178,8 @@ export async function runAutopilotSession(
           character,
           persona,
           apiKey,
-          model,
+          userModel,
+          characterModel,
           preset,
           promptConfig,
           turnIndex: i,

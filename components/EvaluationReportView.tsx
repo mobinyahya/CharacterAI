@@ -7,7 +7,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ModelBadge } from "@/components/ModelSelector";
 import { CompositeScore, ScoreBar } from "@/components/ui/score-bar";
-import { EVAL_DIMENSIONS, scoreColor } from "@/lib/evaluation";
+import {
+  EVAL_DIMENSIONS,
+  buildEvaluationExport,
+  evaluationExportFilename,
+  scoreColor,
+} from "@/lib/evaluation";
+import { getSession } from "@/lib/storage";
 import { downloadText, formatRelativeTime } from "@/lib/utils";
 import type {
   CharacterCard,
@@ -23,8 +29,38 @@ import {
   Lightbulb,
   Quote,
   Shield,
+  Sparkles,
   Target,
+  Wrench,
 } from "lucide-react";
+
+// ============================================================================
+// Helpers — root cause attribution + small shared bits
+// ============================================================================
+
+const ROOT_CAUSE_TONE: Record<"card" | "runtime" | "both", string> = {
+  card: "border-amber-500/40 bg-amber-500/10 text-amber-200",
+  runtime: "border-sky-500/40 bg-sky-500/10 text-sky-200",
+  both: "border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-200",
+};
+
+const ROOT_CAUSE_LABEL: Record<"card" | "runtime" | "both", string> = {
+  card: "Card-level",
+  runtime: "Runtime-level",
+  both: "Card + runtime",
+};
+
+function RootCauseBadge({ cause }: { cause: "card" | "runtime" | "both" }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider ${ROOT_CAUSE_TONE[cause]}`}
+      title="Root-cause attribution from the judge"
+    >
+      <Wrench className="h-2.5 w-2.5" />
+      {ROOT_CAUSE_LABEL[cause]}
+    </span>
+  );
+}
 
 interface EvaluationReportViewProps {
   report: EvaluationReport;
@@ -43,11 +79,11 @@ export function EvaluationReportView({
   const compact = variant === "compact";
 
   function handleDownload() {
-    const stamp = new Date(report.createdAt).toISOString().slice(0, 10);
-    const safe = (character?.name || "session").replace(/[^\w-]+/g, "_");
+    const session = getSession(report.sessionId);
+    const bundle = buildEvaluationExport(report, session, character, persona);
     downloadText(
-      `eval_${safe}_${stamp}.json`,
-      JSON.stringify(report, null, 2),
+      evaluationExportFilename(report, character),
+      JSON.stringify(bundle, null, 2),
       "application/json",
     );
   }
@@ -64,7 +100,7 @@ export function EvaluationReportView({
       />
 
       {/* Composite scores */}
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <CompositeScore
           label="Faithfulness — Cluster A"
           score={report.composite.faithfulness}
@@ -74,6 +110,11 @@ export function EvaluationReportView({
           label="Quality — Cluster B"
           score={report.composite.quality}
           hint="Is the session itself any good?"
+        />
+        <CompositeScore
+          label="Texture — Cluster C + D"
+          score={report.composite.texture ?? null}
+          hint="Emotional realism + narrative craft"
         />
         <FlagCard report={report} />
       </div>
@@ -157,6 +198,64 @@ export function EvaluationReportView({
               </li>
             ))}
           </ul>
+          {(report.flags.A6_resolutionAvoidance.rootCause ||
+            report.flags.A6_resolutionAvoidance.suggestion) && (
+            <FlagAttribution
+              rootCause={report.flags.A6_resolutionAvoidance.rootCause ?? null}
+              suggestion={report.flags.A6_resolutionAvoidance.suggestion ?? ""}
+              tone="destructive"
+            />
+          )}
+        </Card>
+      )}
+
+      {/* Internal-consistency flag detail (if triggered) */}
+      {report.flags.B6_internalConsistency?.triggered && (
+        <Card className="border-amber-500/40 bg-amber-500/10 p-5">
+          <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-amber-200">
+            <AlertTriangle className="h-4 w-4" />
+            B6 — Internal consistency violations (
+            {report.flags.B6_internalConsistency.violations.length})
+          </div>
+          <p className="text-xs text-amber-100/80">
+            The character contradicted earlier turns — facts, feelings, or established
+            position. Distinct from A4 self-deception (intentional denial).
+          </p>
+          {report.flags.B6_internalConsistency.violations.length > 0 && (
+            <ul className="mt-3 space-y-3">
+              {report.flags.B6_internalConsistency.violations.map((v, i) => (
+                <li
+                  key={i}
+                  className="rounded-md border border-amber-500/30 bg-background/30 p-3 text-xs"
+                >
+                  <div className="mb-1 flex items-center gap-2 text-amber-200">
+                    <span className="font-mono text-[10px] uppercase">
+                      Turn {v.turn}
+                    </span>
+                    {v.contradicts && (
+                      <>
+                        <span>·</span>
+                        <span className="text-foreground/80">
+                          contradicts: {v.contradicts}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  <blockquote className="border-l-2 border-amber-500/40 pl-3 italic text-foreground/80">
+                    &ldquo;{v.quote}&rdquo;
+                  </blockquote>
+                </li>
+              ))}
+            </ul>
+          )}
+          {(report.flags.B6_internalConsistency.rootCause ||
+            report.flags.B6_internalConsistency.suggestion) && (
+            <FlagAttribution
+              rootCause={report.flags.B6_internalConsistency.rootCause ?? null}
+              suggestion={report.flags.B6_internalConsistency.suggestion ?? ""}
+              tone="warning"
+            />
+          )}
         </Card>
       )}
 
@@ -202,9 +301,55 @@ export function EvaluationReportView({
         scores={report.scores}
         compact={compact}
       />
+      <ClusterSection
+        cluster="C"
+        title="Cluster C — Emotional Texture & Interpersonal Realism"
+        description="Does the character feel emotionally specific and read the user's relational moves?"
+        scores={report.scores}
+        compact={compact}
+      />
+      <ClusterSection
+        cluster="D"
+        title="Cluster D — Narrative Craft"
+        description="Pacing rhythm and behavior individuated beyond archetype defaults."
+        scores={report.scores}
+        compact={compact}
+      />
 
       {/* Raw judge response (collapsed) */}
       <RawJudgeBlock raw={report.rawJudgeResponse} />
+    </div>
+  );
+}
+
+function FlagAttribution({
+  rootCause,
+  suggestion,
+  tone,
+}: {
+  rootCause: "card" | "runtime" | "both" | null;
+  suggestion: string;
+  tone: "destructive" | "warning";
+}) {
+  if (!rootCause && !suggestion) return null;
+  const borderCls =
+    tone === "destructive"
+      ? "border-destructive/30"
+      : "border-amber-500/30";
+  return (
+    <div className={`mt-4 border-t pt-3 ${borderCls}`}>
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          Attribution
+        </span>
+        {rootCause && <RootCauseBadge cause={rootCause} />}
+      </div>
+      {suggestion && (
+        <p className="flex items-start gap-2 text-xs leading-relaxed text-foreground/85">
+          <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-primary" />
+          <span>{suggestion}</span>
+        </p>
+      )}
     </div>
   );
 }
@@ -223,6 +368,8 @@ function Header({
   onDownload: () => void;
 }) {
   const a6 = report.flags.A6_resolutionAvoidance.triggered;
+  const b6 = report.flags.B6_internalConsistency?.triggered ?? false;
+  const b6Count = report.flags.B6_internalConsistency?.violations.length ?? 0;
   return (
     <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
       <div>
@@ -251,11 +398,31 @@ function Header({
           </span>
           <ModelBadge modelId={report.judgeModel} />
           <span className="text-muted-foreground">·</span>
-          <span className="text-muted-foreground">driver</span>
-          <ModelBadge modelId={report.driverModel} />
+          {report.userDriverModel ? (
+            <>
+              <span className="text-muted-foreground">user</span>
+              <ModelBadge modelId={report.userDriverModel} />
+              <span className="text-muted-foreground">·</span>
+              <span className="text-muted-foreground">char</span>
+              <ModelBadge modelId={report.driverModel} />
+            </>
+          ) : (
+            <>
+              <span className="text-muted-foreground">driver</span>
+              <ModelBadge modelId={report.driverModel} />
+            </>
+          )}
           {a6 && (
             <Badge variant="destructive" className="text-[10px]">
               A6 flag
+            </Badge>
+          )}
+          {b6 && (
+            <Badge
+              className="border-amber-500/40 bg-amber-500/10 text-amber-200 text-[10px]"
+              variant="outline"
+            >
+              B6 · {b6Count}
             </Badge>
           )}
         </div>
@@ -280,9 +447,17 @@ function Header({
 }
 
 function FlagCard({ report }: { report: EvaluationReport }) {
-  const triggered = report.flags.A6_resolutionAvoidance.triggered;
+  const a6 = report.flags.A6_resolutionAvoidance.triggered;
+  const b6 = report.flags.B6_internalConsistency?.triggered ?? false;
+  const b6Count = report.flags.B6_internalConsistency?.violations.length ?? 0;
   const otherCount = report.flags.other.length;
-  const tone = triggered ? "destructive" : otherCount > 0 ? "warning" : "great";
+  // A6 is the headline — it's the highest diagnostic weight failure mode.
+  // B6 is "user notices these immediately and they break investment."
+  const tone: "destructive" | "warning" | "great" = a6
+    ? "destructive"
+    : b6 || otherCount > 0
+      ? "warning"
+      : "great";
   const toneBg: Record<typeof tone, string> = {
     destructive: "border-destructive/40 bg-destructive/10",
     warning: "border-amber-500/40 bg-amber-500/10",
@@ -293,23 +468,35 @@ function FlagCard({ report }: { report: EvaluationReport }) {
     warning: "text-amber-300",
     great: "text-emerald-300",
   };
-  const Icon = triggered ? AlertTriangle : CheckCircle2;
+  const Icon = a6 || b6 ? AlertTriangle : CheckCircle2;
+  const headline = a6
+    ? "A6 triggered"
+    : b6
+      ? `B6 · ${b6Count} violation${b6Count === 1 ? "" : "s"}`
+      : otherCount > 0
+        ? `${otherCount} flag${otherCount === 1 ? "" : "s"}`
+        : "Clean";
+  const subline = a6
+    ? b6
+      ? `Runtime invented in-fiction escapes; B6 also triggered (${b6Count}).`
+      : "Runtime invented an in-fiction escape to preserve central tension."
+    : b6
+      ? "Character contradicted earlier turns. Common at long context."
+      : otherCount > 0
+        ? "See the other-flags panel below."
+        : "No A6, no B6, no other flags raised.";
   return (
     <div className={`rounded-xl border p-5 ${toneBg[tone]}`}>
       <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
         Failure flags
       </div>
-      <div className={`mt-1 flex items-center gap-2 text-2xl font-semibold ${toneText[tone]}`}>
+      <div
+        className={`mt-1 flex items-center gap-2 text-2xl font-semibold ${toneText[tone]}`}
+      >
         <Icon className="h-5 w-5" />
-        {triggered ? "A6 triggered" : otherCount > 0 ? `${otherCount} flag${otherCount === 1 ? "" : "s"}` : "Clean"}
+        {headline}
       </div>
-      <div className="mt-1 text-[11px] text-muted-foreground">
-        {triggered
-          ? "Runtime invented an in-fiction escape to preserve central tension."
-          : otherCount > 0
-            ? "See the other-flags panel below."
-            : "No resolution-avoidance, no other flags raised."}
-      </div>
+      <div className="mt-1 text-[11px] text-muted-foreground">{subline}</div>
     </div>
   );
 }
@@ -321,13 +508,14 @@ function ClusterSection({
   scores,
   compact,
 }: {
-  cluster: "A" | "B";
+  cluster: "A" | "B" | "C" | "D";
   title: string;
   description: string;
   scores: Record<string, DimensionScore>;
   compact: boolean;
 }) {
   const dims = EVAL_DIMENSIONS.filter((d) => d.cluster === cluster);
+  if (dims.length === 0) return null;
   return (
     <section>
       <div className="mb-3">
@@ -361,18 +549,32 @@ function DimensionCard({
   score: DimensionScore | undefined;
 }) {
   const [open, setOpen] = React.useState(false);
-  const s = score ?? { score: null, notes: "", evidence: [] };
+  const s: DimensionScore = score ?? { score: null, notes: "", evidence: [] };
   const tone = scoreColor(s.score);
-  const isNa = s.score === null;
+  const isInsufficient = !!s.insufficientTrace;
+  const isNa = s.score === null && !isInsufficient;
+  // Per spec: sub-4 scores require root-cause + concrete suggestion.
+  const showAttribution =
+    typeof s.score === "number" && s.score < 4 && (s.rootCause || s.suggestion);
+
   return (
     <Card className="p-4">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
               {dimensionId}
             </span>
             <span className="text-sm font-medium text-foreground">{label}</span>
+            {isInsufficient && (
+              <Badge
+                variant="outline"
+                className="border-amber-500/40 bg-amber-500/10 text-amber-200 text-[10px]"
+                title="Judge declared the trace too short to evaluate this dimension meaningfully"
+              >
+                Insufficient trace
+              </Badge>
+            )}
             {isNa && (
               <Badge variant="muted" className="text-[10px]">
                 N/A
@@ -388,11 +590,29 @@ function DimensionCard({
         </div>
       </div>
 
-      {(s.notes || s.evidence.length > 0) && (
+      {(s.notes || s.evidence.length > 0 || showAttribution) && (
         <div className="mt-3 border-t border-border/60 pt-3">
           {s.notes && (
             <p className="text-xs leading-relaxed text-foreground/85">{s.notes}</p>
           )}
+
+          {showAttribution && (
+            <div className="mt-3 space-y-1.5 rounded-md border border-border/60 bg-card/40 p-2.5">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Attribution
+                </span>
+                {s.rootCause && <RootCauseBadge cause={s.rootCause} />}
+              </div>
+              {s.suggestion && (
+                <p className="flex items-start gap-2 text-xs leading-relaxed text-foreground/85">
+                  <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-primary" />
+                  <span>{s.suggestion}</span>
+                </p>
+              )}
+            </div>
+          )}
+
           {s.evidence.length > 0 && (
             <div className="mt-3">
               <button

@@ -110,23 +110,29 @@ export default function EvaluationDetailPage() {
           <span className="self-center text-[11px] uppercase tracking-wider text-muted-foreground">
             History:
           </span>
-          {reports.map((r) => (
-            <button
-              key={r.id}
-              type="button"
-              onClick={() => setActiveId(r.id)}
-              className={`rounded-md border px-2 py-1 text-[11px] transition-colors ${
-                r.id === active.id
-                  ? "border-primary/50 bg-primary/10 text-foreground"
-                  : "border-border bg-card/40 text-muted-foreground hover:border-border/80 hover:text-foreground"
-              }`}
-            >
-              {formatRelativeTime(r.createdAt)} · F
-              {r.composite.faithfulness?.toFixed(1) ?? "—"} / Q
-              {r.composite.quality?.toFixed(1) ?? "—"}
-              {r.flags.A6_resolutionAvoidance.triggered && " · A6"}
-            </button>
-          ))}
+          {reports.map((r) => {
+            const a6 = r.flags.A6_resolutionAvoidance.triggered;
+            const b6 = r.flags.B6_internalConsistency?.triggered ?? false;
+            return (
+              <button
+                key={r.id}
+                type="button"
+                onClick={() => setActiveId(r.id)}
+                className={`rounded-md border px-2 py-1 text-[11px] transition-colors ${
+                  r.id === active.id
+                    ? "border-primary/50 bg-primary/10 text-foreground"
+                    : "border-border bg-card/40 text-muted-foreground hover:border-border/80 hover:text-foreground"
+                }`}
+              >
+                {formatRelativeTime(r.createdAt)} · F
+                {r.composite.faithfulness?.toFixed(1) ?? "—"} / Q
+                {r.composite.quality?.toFixed(1) ?? "—"} / T
+                {r.composite.texture?.toFixed(1) ?? "—"}
+                {a6 && " · A6"}
+                {b6 && " · B6"}
+              </button>
+            );
+          })}
         </div>
       )}
 

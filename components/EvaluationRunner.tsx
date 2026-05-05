@@ -140,7 +140,9 @@ export function EvaluationRunner() {
     {},
   );
   const [turns, setTurns] = React.useState<number>(15);
-  const [driverModel, setDriverModel] = React.useState<string>(DEFAULT_MODEL);
+  const [userModel, setUserModel] = React.useState<string>(DEFAULT_MODEL);
+  const [characterModel, setCharacterModel] =
+    React.useState<string>(DEFAULT_MODEL);
   const [judgeModel, setJudgeModel] =
     React.useState<string>(DEFAULT_JUDGE_MODEL);
   const [promptConfig, setPromptConfig] = React.useState<
@@ -161,7 +163,9 @@ export function EvaluationRunner() {
     setPersonas(ps);
     setPresets(pp);
     setHasKey(!!cfg.openRouterApiKey);
-    setDriverModel(cfg.defaultModel || DEFAULT_MODEL);
+    const defaultDriver = cfg.defaultModel || DEFAULT_MODEL;
+    setUserModel(defaultDriver);
+    setCharacterModel(defaultDriver);
 
     const preselect = searchParams?.get("characterId");
     if (preselect && cs.find((c) => c.id === preselect)) {
@@ -283,7 +287,8 @@ export function EvaluationRunner() {
           ? selectedOption.persona.id
           : undefined,
       personaSnapshot: snapshot,
-      model: driverModel,
+      model: characterModel,
+      userModel,
       messages: initial,
       promptConfig,
       createdAt: now,
@@ -318,7 +323,8 @@ export function EvaluationRunner() {
           character,
           persona,
           apiKey,
-          model: driverModel,
+          userModel,
+          characterModel,
           turns,
           preset,
           promptConfig,
@@ -427,9 +433,11 @@ export function EvaluationRunner() {
 
       toast({
         title: "Evaluation complete",
-        description: `Faithfulness ${
+        description: `F ${
           report.composite.faithfulness?.toFixed(2) ?? "—"
-        } · Quality ${report.composite.quality?.toFixed(2) ?? "—"}`,
+        } · Q ${report.composite.quality?.toFixed(2) ?? "—"} · T ${
+          report.composite.texture?.toFixed(2) ?? "—"
+        }`,
         variant: "success",
       });
     } catch (err) {
@@ -507,8 +515,10 @@ export function EvaluationRunner() {
       onInjectionsChange={setInjections}
       turns={turns}
       onTurnsChange={setTurns}
-      driverModel={driverModel}
-      onDriverModelChange={setDriverModel}
+      userModel={userModel}
+      onUserModelChange={setUserModel}
+      characterModel={characterModel}
+      onCharacterModelChange={setCharacterModel}
       judgeModel={judgeModel}
       onJudgeModelChange={setJudgeModel}
       presets={presets}
@@ -538,8 +548,10 @@ function ConfigurePhase(props: {
   onInjectionsChange: (next: Record<string, string>) => void;
   turns: number;
   onTurnsChange: (n: number) => void;
-  driverModel: string;
-  onDriverModelChange: (m: string) => void;
+  userModel: string;
+  onUserModelChange: (m: string) => void;
+  characterModel: string;
+  onCharacterModelChange: (m: string) => void;
   judgeModel: string;
   onJudgeModelChange: (m: string) => void;
   presets: PromptPreset[];
@@ -562,8 +574,10 @@ function ConfigurePhase(props: {
     onInjectionsChange,
     turns,
     onTurnsChange,
-    driverModel,
-    onDriverModelChange,
+    userModel,
+    onUserModelChange,
+    characterModel,
+    onCharacterModelChange,
     judgeModel,
     onJudgeModelChange,
     presets,
@@ -677,13 +691,30 @@ function ConfigurePhase(props: {
               )}
             </div>
 
-            <div className="space-y-2">
-              <Label>Driver model (runs both LLM sides during the chat)</Label>
-              <ModelSelector
-                value={driverModel}
-                onChange={onDriverModelChange}
-                showBadge
-              />
+            <div className="space-y-3 rounded-md border border-border/60 bg-card/30 p-3">
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Driver models
+              </div>
+              <div className="space-y-2">
+                <Label>User-side LLM (drives the persona)</Label>
+                <ModelSelector
+                  value={userModel}
+                  onChange={onUserModelChange}
+                  showBadge
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Character-side LLM (drives the card)</Label>
+                <ModelSelector
+                  value={characterModel}
+                  onChange={onCharacterModelChange}
+                  showBadge
+                />
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                The two sides can use different models — useful for stress-testing
+                a weaker character LLM against a strong adversarial user.
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -699,8 +730,7 @@ function ConfigurePhase(props: {
                 ))}
               </Select>
               <p className="text-[11px] text-muted-foreground">
-                Strong judges give more reliable JSON. Default: Claude Sonnet
-                4.5.
+                Strong judges give more reliable evaluation.
               </p>
             </div>
 
@@ -751,7 +781,8 @@ function ConfigurePhase(props: {
         selectedCatalog={selectedCatalog}
         injections={injections}
         turns={turns}
-        driverModel={driverModel}
+        userModel={userModel}
+        characterModel={characterModel}
         judgeModel={judgeModel}
         preset={presets.find((p) => p.id === promptConfig?.presetId)}
       />
@@ -917,7 +948,8 @@ function PreviewSidebar({
   selectedCatalog,
   injections,
   turns,
-  driverModel,
+  userModel,
+  characterModel,
   judgeModel,
   preset,
 }: {
@@ -925,7 +957,8 @@ function PreviewSidebar({
   selectedCatalog: EvalPersona | null;
   injections: Record<string, string>;
   turns: number;
-  driverModel: string;
+  userModel: string;
+  characterModel: string;
   judgeModel: string;
   preset: PromptPreset | undefined;
 }) {
@@ -989,8 +1022,12 @@ function PreviewSidebar({
         <div className="space-y-2.5">
           <Row label="Turns" value={`${turns}`} />
           <Row
-            label="Driver model"
-            value={<ModelBadge modelId={driverModel} />}
+            label="User LLM"
+            value={<ModelBadge modelId={userModel} />}
+          />
+          <Row
+            label="Character LLM"
+            value={<ModelBadge modelId={characterModel} />}
           />
           <Row
             label="Judge model"

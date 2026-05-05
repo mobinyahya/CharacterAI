@@ -1,249 +1,229 @@
 # CharacterAI
 
-A web-based workshop for **building, evaluating, and chatting with AI characters**. Built per the project spec in `Overview.md` and `Implementation.md`.
+A web workshop for **building, evaluating, and chatting with AI characters** — with a systematic story for catching shallow / drifting / generic characters before users see them.
 
-The app has two interleaved sides:
+Spec docs: [`Overview.md`](./Overview.md), [`Implementation.md`](./Implementation.md), [`ChatEval.md`](./ChatEval.md), [`StaticEval.md`](./StaticEval.md).
 
-1. **User-facing chat** — browse a library of AI characters, pick a model, and have a streaming conversation with them.
-2. **Creator evaluation tooling** — define characters with psychological depth, run **auto-pilot** sessions where a *user-persona LLM* talks to the *character LLM* automatically, then have an **LLM judge** score the resulting transcript on the Card-Faithfulness + Session-Quality rubric from `ChatEval.md`. This surfaces voice drift, limit collapse, agency failures, resolution-avoidance, and other failure modes before users ever see the character.
+---
 
-## Tech Stack
+## The goal
 
-- **Next.js 14** (App Router) + **TypeScript**
-- **Tailwind CSS** + locally-built shadcn-style UI primitives (no `npx shadcn` step needed)
-- **OpenRouter** as the single LLM gateway → access to Gemini, DeepSeek, Claude, GPT-4o, Llama, etc. with one API key
-- **localStorage** for all persistence (no backend in v1)
-- **Streaming** SSE responses so characters "type" in real time
+Most character-chat platforms have a **character quality** problem: voices drift over long sessions, stated personalities don't match how characters actually behave under pressure, limits collapse on first push, and most "characters" feel like thin skins over a generic LLM. Users churn when characters feel flat.
 
-## Getting Started
+This project bets that **character quality can be defined, measured, and improved systematically** — using psychological frameworks for the spec and automated LLM-judged evaluation for the feedback loop.
 
-```bash
-# from the project root
-npm install
-npm run dev
-# → http://localhost:3000
+Two interleaved sides:
+
+- **User-facing chat** — browse a library, pick a model, talk to a character.
+- **Creator evaluation tooling** — define characters at psychological depth, drive an *automated* chat between a user-persona LLM and the character LLM, then have a strong judge model score the transcript on a 14-dimension rubric (+ an explicit failure flag) with verbatim citations.
+
+---
+
+## What it does (parts of the system)
+
+| Part | What it is | Where it lives |
+|---|---|---|
+| **Character library** | Cards with backstory, voice, multi-state behavior, limits + provenance, self-model gap, worldview, secret, NPCs, first message, full system prompt. | `/characters` |
+| **Persona library** | User-created system prompts that drive the user side during auto-pilot. | `/personas` |
+| **Prompt presets** | Reusable narrator-style modules composed *on top of* a character card (Base Prompt, NSFW, etc). Modular: core + optional toggles. | `/prompts` |
+| **Manual chat** | Streaming human ↔ character chat with model switcher and Evaluate button. | `/chat/new`, `/chat/[id]` |
+| **Auto-pilot** | LLM ↔ LLM N-turn engine. Persona-LLM types the user side, character-LLM responds. | `/chat/[id]` (auto mode) |
+| **Evaluate runner** | One-shot pipeline: pick character + ChatEval persona + N turns + judge → autopilot streams live, judge runs immediately after, report renders inline. | `/evaluate` |
+| **Evaluation dashboard** | Suite-level stats, per-character roll-ups, all-reports table, deep-linkable detail page with history. | `/evaluations`, `/evaluations/[id]` |
+| **Settings** | API key, default model, clear-all-data. | `/settings` |
+
+### The two creator workflows
+
+1. **Build** → fill in a character card (`/characters/new`).
+2. **Evaluate** → `/evaluate` → pick a ChatEval persona → run autopilot + judge end-to-end → read the report → refine the card → re-run.
+
+The evaluation loop is the differentiator. It catches: voice drift, dialogue self-gap collapse, limit collapse inconsistent with provenance, worldview-asserted-but-never-applied, and **resolution avoidance** (the highest-leverage failure mode — runtime invents in-fiction escapes to preserve central tension when the user-LLM tries to dissolve it).
+
+---
+
+## Tech stack
+
+- **Next.js 14** App Router + **TypeScript**
+- **Tailwind** + locally-built shadcn-style UI primitives (no `npx shadcn` step)
+- **OpenRouter** as the single LLM gateway → Gemini, DeepSeek, Claude, GPT-4o, Llama, etc. with one API key
+- **localStorage** for all persistence — no backend in v1
+- **Streaming** SSE for both chat (token-by-token bubbles) and judge (live JSON)
+
+---
+
+## How it's wired
+
+### Layered code structure
+
+- **`lib/openrouter.ts`** — single `streamCompletion()` function. Parses SSE, calls `onChunk(token)` per chunk, rejects with typed `OpenRouterError` (rate limit, invalid key, model not found surfaced distinctly).
+- **`lib/promptBuilder.ts`** — composes the character system prompt as `[narrator preset] --- [character card with {{user}}/{{char}} filled] --- [output rules]`. Builds OpenRouter message arrays for both character and persona LLM calls (the persona call gets the history with roles flipped).
+- **`lib/autopilot.ts`** — N-turn engine. Each turn = persona-LLM call → user message → character-LLM call → assistant message. 500 ms gap between turns. AbortSignal on every call so Stop is responsive.
+- **`lib/evaluation.ts`** — rubric catalog (`EVAL_DIMENSIONS` with 0/3/5 anchors per dim), judge prompt builder, defensive JSON parser (extracts the first balanced `{}` block, clamps numeric scores, handles N/A nulls), composite computation.
+- **`lib/evalPersonas.ts`** — fixed catalog of the 6 ChatEval personas with structured `injectionFields[]`. `resolveEvalPersona(catalogEntry, injections)` synthesizes a `UserPersona` for the run; `suggestInjectionsFromCard(card)` auto-pre-fills injection text by scanning the card for matching markdown headers (`# Limits`, `# Worldview`, etc).
+- **`lib/storage.ts`** — typed localStorage wrappers, first-run seeding, cascade-deletes (delete a character → its sessions + reports go too), and `resolveSessionPersona()` which prefers the embedded persona snapshot (for catalog runs) and falls back to library lookup.
+
+### Data flow for `/evaluate`
+
+```
+configure  ──▶  resolveEvalPersona(catalog, injections)  ──▶  Session w/ personaSnapshot
+                                                                       │
+                                                                       ▼
+                                runAutopilotSession({character, persona, turns, ...})
+                                  ├─ stream live transcript bubble-by-bubble
+                                  └─ persist Session.messages after every turn
+                                                                       │
+                                                                       ▼
+                                runEvaluation({session, character, persona, judgeModel})
+                                  ├─ stream judge JSON live
+                                  └─ parseJudgeResponse → EvaluationReport
+                                                                       │
+                                                                       ▼
+                                          tabbed view: Report | Transcript
 ```
 
-On first run the app pre-seeds:
+### Data model (key fields, see `types/index.ts`)
 
-- The **Vincent Moreau** character so you can chat immediately.
-- Two **prompt presets** (Base Prompt + NSFW System).
+- `CharacterCard` — `name`, `description`, `firstMessage`, `systemPrompt` (the full card), `tags[]`, …
+- `UserPersona` — `name`, `systemPrompt`, `description?` …
+- `PromptPreset` — `title`, `modules[]` (each module: `id`, `content`, `isCore`).
+- `Session` — `characterId`, `personaId?` (library) **or** `personaSnapshot?` (catalog), `model`, `messages[]`, `promptConfig?`. Snapshot carries `source`, `name`, the resolved `systemPrompt`, and `injections` so reports remain reconstructible long after the run.
+- `EvaluationReport` — composites, per-dimension `{ score, notes, evidence:[{turn, quote}] }`, A6 flag with instances, `cardShape`, `spine`, `statesActivated`, `topSuggestions`, `rawJudgeResponse` (kept verbatim for audit).
 
-The **six canonical evaluation personas** from `ChatEval.md` (Sustained-Presence, Genre-Deflater, Bluff-Caller, Informed Antagonist, Worldview Violator, State-Cycle Prober) live in `lib/evalPersonas.ts` as a fixed system catalog and are surfaced inside the **Evaluate** flow — they're not seeded into the editable persona library.
+### What gets scored (rubric from `ChatEval.md`)
+
+- **Cluster A — Card Faithfulness** (0–5, with anchors)
+  - A1a/A1b voice persistence (dialogue / narration)
+  - A2 state-trigger fidelity · A3 limit integrity by provenance
+  - A4a/A4b self-gap maintenance + location *(N/A for Closed cards)*
+  - A5 worldview activation · A7 spec containment · A8 NPC fidelity *(conditional)*
+- **Cluster B — Session Quality** (0–5, with anchors)
+  - B1 agency / initiation rate · B2 per-turn info density
+  - B3 arc development · B4 show vs. tell · B5 continuity & callback
+- **A6 — Resolution avoidance** (binary flag, headlined on every report; highest diagnostic weight)
+- Composites: `faithfulness = mean(Cluster A non-null)`, `quality = mean(Cluster B non-null)`. A6 never folds into means.
+- Judge cites verbatim quotes with turn numbers per non-null score; negative scores **must** cite a failure-evidence turn.
+
+### The 6 ChatEval personas (system catalog, not in the editable library)
+
+| Persona | Probes | Injection? |
+|---|---|---|
+| Sustained-Presence | A1a/A1b drift, B1 agency under no friction, B2/B5 | none |
+| Genre-Deflater | A6 resolution avoidance, B1 real agency, A7 | none |
+| Bluff-Caller | A6, A3 at the leverage layer | central leverage |
+| Informed Antagonist | A3 under attack, A4 wound-triggered self-gap, B1 | weak points |
+| Worldview Violator | A5 (clean test on third parties / non-self situations) | worldview / values |
+| State-Cycle Prober | A2 state fidelity, A2b coverage, A8 | state list with triggers |
+
+Editing the catalog = edit `lib/evalPersonas.ts` and reload (loaded fresh on every render).
+
+---
+
+## Status vs. spec
+
+What's solid:
+
+- Character / persona / prompt-preset libraries, manual chat, auto-pilot, in-chat Evaluate, dedicated `/evaluate` runner, dashboard with per-character rollups (incl. **A2b state coverage** as cumulative states-activated badges), per-session detail page with run history.
+- Full Cluster A + B rubric with 0/3/5 anchors, A6 binary flag, verbatim citations, defensive JSON parser, raw judge response retained.
+- Persona catalog with auto-fill of injection blocks from the character card.
+
+Known gaps to close:
+
+- **`StaticEval.md` is not implemented.** The static 6-dim card audit (`structure / states / voice / self-gap / worldview / individuation` + Open/Trajectory/Closed routing + gates) has no code path yet. Should land as a separate `/audit` (or in-form sidebar) running pre-conversation against the card text.
+- **C1 cross-card structural similarity** is not surfaced in the dashboard. Needed when running the same persona suite across multiple characters in the same genre.
+- **B1 per-card target rate** (passive ≈15%, manipulative ≈60%+) is not a card field; the judge currently has to infer it. Should become an explicit numeric on `CharacterCard`.
+- **Run-config tiers** (5 / 20 / 50 turns) and **cross-model driver matrix** (same model both sides vs. driver-from-Claude-against-target-from-X) aren't first-class concepts in the runner UI.
+- **Standardized seed scenes per genre** (the `ChatEval.md` "Run Configuration" idea — user-LLM never picks the opening) — currently the character's `firstMessage` is the de-facto seed.
+- **Suite-mode** (one click runs all 6 personas in sequence at chosen turn counts → produces a combined scorecard per character) — not yet built.
+
+---
+
+## Getting started
+
+```bash
+npm install
+npm run dev          # http://localhost:3000
+```
+
+On first run the app pre-seeds the **Vincent Moreau** character and two **prompt presets** (Base + NSFW). The 6 ChatEval personas live in `lib/evalPersonas.ts` and surface inside `/evaluate` only — the editable persona library starts empty.
 
 Add your OpenRouter key in **Settings** before sending a message.
 
 ### Other scripts
 
 ```bash
-npm run build      # production build
-npm run typecheck  # tsc --noEmit
-npm run lint       # eslint
-npm start          # production server (after build)
+npm run build         # production build
+npm run typecheck     # tsc --noEmit
+npm run lint          # eslint
+npm start             # production server (after build)
+node scripts/smoketest.mjs   # static request-payload check, no API calls
 ```
+
+---
 
 ## Configuration
 
-1. Get an API key from [openrouter.ai/keys](https://openrouter.ai/keys).
-2. Open the app → **Settings** → paste the key, optionally hit **Test**, then **Save**.
-3. Pick a default model (used when starting new chats).
+1. Get a key from [openrouter.ai/keys](https://openrouter.ai/keys).
+2. Settings → paste the key → optionally **Test** → **Save**.
+3. Pick a default model (used for new chats).
 
-The key is stored in `localStorage` and is only ever sent to OpenRouter. There's no backend, no analytics, no telemetry.
+The key is in `localStorage` and is only ever sent to OpenRouter. No backend, no analytics, no telemetry.
 
-## Project Structure
+---
+
+## Project structure
 
 ```
-app/                    Next.js App Router pages
-  layout.tsx            Root shell, sidebar, onboarding banner
-  page.tsx              Dashboard — stats + recent sessions
-  characters/           Character library + new/edit forms
-  personas/             User-persona library + new/edit forms
-  prompts/              Prompt-preset library + new/edit forms
+app/                  Next.js App Router pages
+  layout.tsx          Sidebar + onboarding banner shell
+  page.tsx            Dashboard (stats + recent sessions + quick-start)
+  characters/         Character library + new/edit forms
+  personas/           User-persona library + new/edit forms
+  prompts/            Prompt-preset library + new/edit forms
   chat/
-    new/                Session setup (pick character, optional persona, model)
-    [sessionId]/        Live chat interface (manual + auto-pilot)
-  evaluate/
-    page.tsx            One-shot evaluation runner — pick character + system persona +
-                        N turns + judge → autopilot + judge in one click
-  evaluations/
-    page.tsx            Evaluation dashboard — suite stats, per-character roll-ups, all-reports table
-    [sessionId]/        Per-session full report, with history of prior runs
-  settings/             API key, default model, danger zone
-  not-found.tsx         404
+    new/              Session setup (character + optional persona + model)
+    [sessionId]/      Live chat (manual + auto-pilot, in-chat Evaluate panel)
+  evaluate/           One-shot eval runner (configure → run → done)
+  evaluations/        Dashboard + per-session detail page (history, deep-links)
+  settings/           API key, default model, clear-all
 
-components/             React components
-  ui/                   Local shadcn-style primitives (Button, Input, Card, Toast, ScoreBar, …)
-  Sidebar.tsx           Persistent left nav
-  OnboardingBanner.tsx  Top banner prompting for API key
-  CharacterCardForm.tsx Character spec form with live library preview
-  UserPersonaForm.tsx   Persona spec form
-  SessionSetup.tsx      Character + persona + model selector
-  ChatInterface.tsx     Streaming chat UI with manual + auto-pilot modes + Evaluate button
-  ModelSelector.tsx     Reusable model dropdown + provider badges
-  LibraryCard.tsx       Library grid card with edit / delete / start-chat / evaluate
-  EvaluationPanel.tsx   In-chat modal: pick judge model, run, stream, view report + history
-  EvaluationRunner.tsx  Evaluate page — config + live transcript + auto-chained judge + tabbed report
-  EvaluationReportView.tsx  Shared report renderer (composites + per-dimension cards + flags)
+components/
+  ui/                 Local shadcn-style primitives (Button, Card, ScoreBar, …)
+  Sidebar · OnboardingBanner · PageHeader
+  CharacterCardForm · UserPersonaForm · PromptPresetForm
+  ModelSelector · PromptPresetSelector · LibraryCard
+  SessionSetup · ChatInterface
+  EvaluationRunner · EvaluationPanel · EvaluationReportView
 
 lib/
-  openrouter.ts         Streaming chat-completion client + key tester
-  promptBuilder.ts      System prompt composition (preset + character + rules)
-  autopilot.ts          Persona-LLM ↔ Character-LLM N-turn engine
-  evaluation.ts         Rubric catalogue, judge prompt, runEvaluation, JSON parser, composites
-  evalPersonas.ts       System catalog of the six ChatEval personas + injection resolver
-  storage.ts            Typed localStorage wrappers + first-run seeding + resolveSessionPersona
-  seedData.ts           Vincent Moreau character card seed
-  seedPrompts.ts        Built-in prompt presets (loaded from /prompts/*.json)
-  seedPersonas.ts       (placeholder — eval personas are NOT seeded into the library)
-  utils.ts              cn(), uid(), formatRelativeTime, downloadText, …
+  openrouter.ts       Streaming chat-completion + key tester + typed errors
+  promptBuilder.ts    System prompt composition (preset + card + rules)
+  autopilot.ts        N-turn persona-LLM ↔ character-LLM engine (with abort)
+  evaluation.ts       Rubric catalog, judge prompt, runner, defensive JSON parser
+  evalPersonas.ts     ChatEval persona catalog + injection resolver + card auto-fill
+  storage.ts          Typed localStorage wrappers + seeding + persona resolver
+  seedData.ts         Vincent Moreau character card seed
+  seedPrompts.ts      Built-in prompt presets (loaded from /prompts/*.json)
+  seedPersonas.ts     (placeholder — eval personas are NOT seeded into the library)
+  utils.ts            cn(), uid(), formatRelativeTime, downloadText, …
 
-prompts/                Source JSONs for built-in prompt presets
-scripts/
-  smoketest.mjs         Static end-to-end check of request payloads (no API calls)
-
-types/index.ts          Shared TypeScript interfaces + model registry + evaluation types
+prompts/              Source JSONs for built-in prompt presets
+scripts/              smoketest.mjs (static end-to-end payload check, no API)
+types/index.ts        Shared interfaces, model registry, evaluation types
 ```
-
-## Prompt Presets
-
-A **Prompt Preset** is a reusable narrator-style system prompt that gets composed *on top of* a character card. Presets are organized into modules; some are core (always active when the preset is selected) and others are optional toggles.
-
-Two presets ship pre-loaded on first run, derived directly from `prompts/base_prompt.json` and `prompts/nsfw_system.json`:
-
-- **Base Prompt** — narrator engine with 13 modules (CORE PROMPT + 12 optional: World Autonomy, Character Depth, Relationships and Intimacy, NSFW Protocol, etc.).
-- **NSFW System** — single-module preset for explicit roleplay.
-
-You can add your own at `/prompts/new` — paste any JSON in the same shape as `prompts/base_prompt.json` (title, description, modules[]) and the form will pre-fill from it.
-
-When a preset is selected for a session, the system prompt sent to the character-LLM looks like:
-
-```
-# Narrator system prompt
-[CORE PROMPT content]
-[any selected optional modules content]
 
 ---
 
-# Character
-[character card system prompt with {{user}}/{{char}} filled in]
+## Storage
 
----
+`localStorage` keys (all under `charai.*.v1`):
 
-# Output rules
-[built-in formatting rules]
-```
+- `charai.characters.v1` · `charai.personas.v1` · `charai.prompts.v1`
+- `charai.sessions.v1` · `charai.evaluations.v1` · `charai.config.v1`
 
-The narrator preset is intentionally **NOT** sent to the user-persona LLM during auto-pilot — it governs how the character narrates, not how the user behaves.
+Cascade rules: deleting a character drops its sessions and reports; deleting a session drops its reports. **Settings → Clear all data** wipes everything.
 
-## How Auto-Pilot Works
+## Cleaning up
 
-1. You set up a session with a **character** and a **user persona** (and optionally a prompt preset).
-2. The chat interface shows a "Run N turns" button.
-3. Each turn:
-   - The persona-LLM is called with the persona system prompt + the conversation history (with roles flipped, since from its POV the *character* is the assistant). Output → user message.
-   - The character-LLM is called with the (preset + character) system prompt + the now-extended history. Output → assistant message.
-   - Both are streamed live; transcript is persisted after each turn.
-4. A 500ms pause between turns keeps the UI legible.
-5. **Stop** aborts mid-turn.
-
-## One-Shot Evaluation Flow (`/evaluate`)
-
-The dedicated **Evaluate** tab lets you score a character without manually chatting first. You pick a character, pick one of the six built-in ChatEval personas (or any persona from your library), set the turn count, and click run — the page drives the full pipeline end-to-end on one screen:
-
-1. **Configure** — pick character + user-driver persona + N turns + driver model + judge model + (optional) narrator preset.
-2. **Run** — the auto-pilot streams turn-by-turn into a live transcript, with a progress bar showing "Turn k / N".
-3. **Judge** — as soon as the chat finishes the page automatically chains into the judge call; the streaming JSON is shown live.
-4. **Done** — composite scores at the top + tabbed view: **Report** (full rubric breakdown) | **Transcript** (the full chat that produced the score). Buttons: *View full report*, *Continue in chat*, *Run another*.
-
-The session is persisted to localStorage exactly like a manual chat, so it shows up in `/chat/[sessionId]`, `/evaluations`, and `/evaluations/[sessionId]`. Stop anytime — partial transcripts are saved and the page bounces you to the chat view to inspect.
-
-### The six built-in eval personas live in `lib/evalPersonas.ts`
-
-They're a fixed system catalog, **not** seeded into the editable persona library. Each entry carries:
-
-- A system prompt (with `{{user}}` / `{{char}}` tokens).
-- A `probesDimensions` list (which Cluster-A/B IDs the persona surfaces).
-- A `recommendedTurns.default` (Sustained-Presence is 30; the others 12–24).
-- For four of the six: `injectionFields[]` describing what card-specific data the user must paste in (leverage / weak-points / worldview / state-list).
-
-The `/evaluate` runner pre-fills the injection fields by scanning the character card's systemPrompt for matching markdown headers (`# Limits`, `# Worldview`, `# Behavioral states`, etc.). The user can edit the prefilled text inline before running. Resolved injections are snapshotted onto `Session.personaSnapshot.injections` so the report stays reconstructible.
-
-| Persona | What it probes | Injection? |
-|---|---|---|
-| Sustained-Presence | Voice drift over long context (A1a/A1b), agency under no friction (B1), info density (B2), continuity (B5) | none |
-| Genre-Deflater | A6 resolution avoidance, real B1 agency, A7 spec containment | none |
-| Bluff-Caller | A6, A3 (limit integrity at the leverage layer) | central leverage |
-| Informed Antagonist | A3 under attack, A4 wound-triggered self-gap activation, B1 | card-extracted weak points |
-| Worldview Violator | A5 (worldview operative vs. decorative) | card-extracted worldview |
-| State-Cycle Prober | A2 state-trigger fidelity, A2b state coverage, A8 NPC fidelity | state list with triggers |
-
-Editing the catalog itself = edit `lib/evalPersonas.ts` and reload — they're loaded fresh from the file on every render.
-
-## Turn-Based Evaluation (in-chat)
-
-Once you have a transcript (manual or auto-pilot) you can score it on the rubric from `ChatEval.md` with an LLM judge. Click **Evaluate** in the chat top bar — same rubric, same composites, same report, just kicked off from a session you already have rather than the one-shot runner.
-
-### What gets scored
-
-The judge applies fourteen 0–5 dimensions across two clusters, each with explicit `0 / 3 / 5` anchor descriptions to prevent baseline drift, plus a binary failure flag:
-
-- **Cluster A — Card Faithfulness** (is the run holding the card?)
-  - `A1a` Voice persistence — dialogue
-  - `A1b` Voice persistence — narration
-  - `A2`  State-trigger fidelity
-  - `A3`  Limit integrity & collapse pattern
-  - `A4a` Self-gap maintenance — dialogue *(N/A for Closed cards)*
-  - `A4b` Self-gap location — dialogue vs narration *(N/A for Closed cards)*
-  - `A5`  Worldview activation in novel situations
-  - `A7`  Spec containment
-  - `A8`  NPC fidelity *(N/A when no named NPCs in trace)*
-- **Cluster B — Session Quality** (is the session itself any good?)
-  - `B1` Agency / initiation rate
-  - `B2` Per-turn information density
-  - `B3` Story arc development
-  - `B4` Show vs. tell ratio
-  - `B5` Continuity & callback
-- **Binary flag — `A6` Resolution avoidance** — moments where the runtime invents an in-fiction escape to preserve central tension. Highest-weight failure mode; surfaced front-and-center on every report.
-
-For every non-null score the judge cites at least one **verbatim quote with its turn number**. Negative scores must cite the failure-evidence turn. The judge also returns a **spine extraction** (its one-sentence read of the character), the **states it observed activated** in the trace, and **1–3 leverage suggestions** for the creator.
-
-Composite scores: `faithfulness = mean(Cluster A non-null)`, `quality = mean(Cluster B non-null)`. A6 is never folded into the means.
-
-### Running a judge
-
-1. Open any session at `/chat/[sessionId]`.
-2. Click **Evaluate** → pick a judge model (defaults to Claude Sonnet 4.5; only strong reading-comprehension models are offered).
-3. The judge call streams; you see the structured JSON appear live in the panel. **Stop** cancels.
-4. Once parsed the report renders inline. The header shows composites, A6 status, judge + driver model badges, and a JSON download.
-
-The latest report's composites show up as a small badge (`F4.2 · Q3.8`) in the chat top bar so you always know whether the open session has been scored.
-
-### Where reports live
-
-- **`/evaluations`** — dashboard with suite-level stats (avg faithfulness, avg quality, A6 rate), per-character roll-up cards (mean per dimension as mini score-bars + states activated across runs as A2b coverage), and a sortable / filterable table of every report.
-- **`/evaluations/[sessionId]`** — full-page report view, with a `?report=<id>` deep-link and a History strip when a session has multiple judge runs.
-
-### The rubric is auditable
-
-Every report saves the raw judge response alongside the parsed report (collapsed by default in the report view). If you ever want to verify the parser, switch judge models, or feed a transcript through a different rubric, the original JSON is right there.
-
-## Storage Keys
-
-All data is in `localStorage` under these keys:
-
-- `charai.characters.v1`
-- `charai.personas.v1`
-- `charai.prompts.v1`
-- `charai.sessions.v1`
-- `charai.evaluations.v1`
-- `charai.config.v1`
-
-Deleting a character cascades to its sessions and evaluation reports; deleting a session cascades to its evaluation reports. Use **Settings → Clear all data** to wipe everything, or just delete those keys from DevTools.
-
-## Cleaning Up
-
-The project is self-contained:
-
-- All node deps live in `./node_modules` — `rm -rf node_modules` to remove them.
+- All deps are local: `rm -rf node_modules` removes them.
 - All app data lives in your browser's `localStorage` for `localhost:3000` — DevTools → Application → Storage to clear.
 - No global installs, no backend, no databases.

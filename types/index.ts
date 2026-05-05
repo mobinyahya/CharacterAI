@@ -90,7 +90,17 @@ export interface Session {
   personaId?: string;
   /** Resolved persona snapshot used to drive the user side, if any. */
   personaSnapshot?: SessionPersonaSnapshot;
+  /**
+   * Model that produces the CHARACTER's assistant messages. In manual chat
+   * this is the only LLM in play. In auto-pilot it pairs with `userModel`.
+   */
   model: string;
+  /**
+   * Model that produces the USER's messages on the auto-pilot side.
+   * Undefined for manual chats. May equal `model` if the user picked the same
+   * LLM for both sides.
+   */
+  userModel?: string;
   messages: Message[];
   promptConfig?: SessionPromptConfig;
   createdAt: number;
@@ -204,21 +214,61 @@ export type OpenRouterMessage = {
 
 // ---------- Evaluation ----------
 
-export type EvalCluster = "A" | "B";
+export type EvalCluster = "A" | "B" | "C" | "D";
 export type CardShape = "open" | "trajectory" | "closed" | "unknown";
 
+/**
+ * Root-cause attribution for sub-4 scores and triggered binary flags. Per spec:
+ *   - "card"    — the spec is missing the feature needed
+ *   - "runtime" — the spec is fine; the model didn't execute on it
+ *   - "both"    — both contribute, name both in the suggestion
+ *   - null      — N/A (score >= 4, or insufficient trace)
+ */
+export type RootCause = "card" | "runtime" | "both" | null;
+
 export interface DimensionScore {
-  /** 0..5, or null when the dimension is N/A for this card/session. */
+  /** 0..5, or null when the dimension is N/A for this card/session, or trace is too short. */
   score: number | null;
   /** Judge's explanation for the score (1-3 sentences). */
   notes: string;
   /** Verbatim transcript citations supporting the score. */
   evidence: { turn: number; quote: string }[];
+  /**
+   * Required by the rubric for any score below 4. null when score >= 4,
+   * dimension is N/A, or judge marked the trace as insufficient.
+   */
+  rootCause?: RootCause;
+  /**
+   * Concrete card-level fix or runtime/prompting note. Required for sub-4
+   * scores. Empty string when not applicable.
+   */
+  suggestion?: string;
+  /**
+   * True when the judge declared the trace too short to evaluate this
+   * dimension meaningfully (e.g. B3 story arc with only 5 turns). When set,
+   * `score` should be null.
+   */
+  insufficientTrace?: boolean;
 }
 
 export interface ResolutionAvoidanceFlag {
   triggered: boolean;
   instances: { turn: number; quote: string; reason: string }[];
+  /** Attribution when triggered. */
+  rootCause?: RootCause;
+  /** Improvement suggestion when triggered. */
+  suggestion?: string;
+}
+
+export interface InternalConsistencyFlag {
+  triggered: boolean;
+  /**
+   * Each violation: the offending turn + quote, and what earlier
+   * fact / feeling / position it contradicts.
+   */
+  violations: { turn: number; quote: string; contradicts: string }[];
+  rootCause?: RootCause;
+  suggestion?: string;
 }
 
 export interface EvaluationReport {
@@ -233,8 +283,17 @@ export interface EvaluationReport {
    * (and therefore not in the library).
    */
   personaName?: string;
-  /** Model that ran the SESSION (driver). */
+  /**
+   * Model that produced the CHARACTER turns in the session. Kept under the
+   * legacy `driverModel` name for backward compatibility — older single-driver
+   * reports also populate this field.
+   */
   driverModel: string;
+  /**
+   * Model that produced the USER turns on the auto-pilot side. Undefined for
+   * older single-driver reports and for manual-chat evaluations.
+   */
+  userDriverModel?: string;
   /** Model that produced this evaluation (judge). */
   judgeModel: string;
   /** Number of turns in the transcript at evaluation time. */
@@ -242,10 +301,16 @@ export interface EvaluationReport {
   cardShape: CardShape;
   /** Spine extraction: judge's one-sentence read of the character. */
   spine: string;
-  /** Per-dimension scores keyed by dimension id (A1a, A1b, A2, ... B5). */
+  /** Per-dimension scores keyed by dimension id (A1a, A1b, A2, ... D2). */
   scores: Record<string, DimensionScore>;
   flags: {
     A6_resolutionAvoidance: ResolutionAvoidanceFlag;
+    /**
+     * Internal consistency violations (model losing track of facts/positions/
+     * feelings). Distinct from A4 self-deception. Optional in storage so that
+     * pre-rubric-v2 reports parse without migration.
+     */
+    B6_internalConsistency?: InternalConsistencyFlag;
     other: { label: string; turn?: number; quote?: string }[];
   };
   /** States from the card that the judge identified as activated in the trace. */
@@ -256,6 +321,11 @@ export interface EvaluationReport {
   composite: {
     faithfulness: number | null;
     quality: number | null;
+    /**
+     * Mean of Cluster C + Cluster D scored dimensions. Optional in storage
+     * so pre-rubric-v2 reports continue to parse.
+     */
+    texture?: number | null;
   };
   /** Raw judge text response (kept for transparency / debugging). */
   rawJudgeResponse: string;

@@ -1,4 +1,4 @@
-Project Overview & Context Document
+ Project Overview & Context Document
 To be included at the top of the Cursor project as PROJECT_CONTEXT.md
 
 What This Is

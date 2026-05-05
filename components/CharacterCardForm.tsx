@@ -50,7 +50,7 @@ export function CharacterCardForm({ initial, mode }: CharacterCardFormProps) {
   function validate(): boolean {
     const e: Record<string, string> = {};
     if (!name.trim()) e.name = "Name is required.";
-    if (!systemPrompt.trim()) e.systemPrompt = "System prompt is required.";
+    if (!systemPrompt.trim()) e.systemPrompt = "Character card is required.";
     setErrors(e);
     return Object.keys(e).length === 0;
   }
@@ -175,7 +175,7 @@ export function CharacterCardForm({ initial, mode }: CharacterCardFormProps) {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">
-              System prompt <span className="text-destructive">*</span>
+              Character Card <span className="text-destructive">*</span>
             </CardTitle>
             <CardDescription>
               The full character card injected as the system message. Define

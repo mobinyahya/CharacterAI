@@ -7,22 +7,29 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
+import { Dialog } from "@/components/ui/dialog";
 import { ModelBadge } from "@/components/ModelSelector";
 import { CompositeScore, ScoreBar } from "@/components/ui/score-bar";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Select } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 import {
   EVAL_DIMENSIONS,
   FAITHFULNESS_DIMS,
   QUALITY_DIMS,
+  TEXTURE_DIMS,
+  buildEvaluationExport,
+  evaluationExportFilename,
 } from "@/lib/evaluation";
 import {
+  deleteEvaluation,
   getCharacters,
   getEvaluations,
   getPersonas,
+  getSession,
 } from "@/lib/storage";
-import { formatRelativeTime } from "@/lib/utils";
+import { downloadText, formatRelativeTime } from "@/lib/utils";
 import type {
   CharacterCard,
   EvaluationReport,
@@ -33,12 +40,14 @@ import {
   ArrowRight,
   ArrowUpDown,
   BarChart3,
+  Download,
   Filter,
   Gavel,
   Search,
+  Trash2,
 } from "lucide-react";
 
-type SortKey = "date" | "faithfulness" | "quality" | "character";
+type SortKey = "date" | "faithfulness" | "quality" | "texture" | "character";
 
 export default function EvaluationsDashboardPage() {
   const [evals, setEvals] = React.useState<EvaluationReport[]>([]);
@@ -49,6 +58,9 @@ export default function EvaluationsDashboardPage() {
   const [search, setSearch] = React.useState("");
   const [sortKey, setSortKey] = React.useState<SortKey>("date");
   const [sortDesc, setSortDesc] = React.useState(true);
+  const [pendingDelete, setPendingDelete] =
+    React.useState<EvaluationReport | null>(null);
+  const { toast } = useToast();
 
   const reload = React.useCallback(() => {
     setEvals(getEvaluations());
@@ -56,6 +68,26 @@ export default function EvaluationsDashboardPage() {
     setPersonas(getPersonas());
     setLoaded(true);
   }, []);
+
+  function handleConfirmDelete() {
+    if (!pendingDelete) return;
+    deleteEvaluation(pendingDelete.id);
+    setPendingDelete(null);
+    reload();
+    toast({ title: "Evaluation deleted", variant: "success" });
+  }
+
+  function handleDownload(report: EvaluationReport) {
+    const character = charById.get(report.characterId);
+    const persona = report.personaId ? personaById.get(report.personaId) : undefined;
+    const session = getSession(report.sessionId);
+    const bundle = buildEvaluationExport(report, session, character, persona);
+    downloadText(
+      evaluationExportFilename(report, character),
+      JSON.stringify(bundle, null, 2),
+      "application/json",
+    );
+  }
 
   React.useEffect(() => {
     reload();
@@ -77,7 +109,9 @@ export default function EvaluationsDashboardPage() {
         count: 0,
         avgFaith: null as number | null,
         avgQuality: null as number | null,
+        avgTexture: null as number | null,
         a6Rate: null as number | null,
+        b6Rate: null as number | null,
       };
     }
     const fs = evals
@@ -86,14 +120,22 @@ export default function EvaluationsDashboardPage() {
     const qs = evals
       .map((e) => e.composite.quality)
       .filter((v): v is number => typeof v === "number");
+    const ts = evals
+      .map((e) => e.composite.texture ?? null)
+      .filter((v): v is number => typeof v === "number");
     const a6Triggered = evals.filter(
       (e) => e.flags.A6_resolutionAvoidance.triggered,
+    ).length;
+    const b6Triggered = evals.filter(
+      (e) => e.flags.B6_internalConsistency?.triggered ?? false,
     ).length;
     return {
       count: evals.length,
       avgFaith: fs.length ? fs.reduce((a, b) => a + b, 0) / fs.length : null,
       avgQuality: qs.length ? qs.reduce((a, b) => a + b, 0) / qs.length : null,
+      avgTexture: ts.length ? ts.reduce((a, b) => a + b, 0) / ts.length : null,
       a6Rate: a6Triggered / evals.length,
+      b6Rate: b6Triggered / evals.length,
     };
   }, [evals]);
 
@@ -103,7 +145,9 @@ export default function EvaluationsDashboardPage() {
     reports: EvaluationReport[];
     avgFaith: number | null;
     avgQuality: number | null;
+    avgTexture: number | null;
     a6Count: number;
+    b6Count: number;
     perDim: Record<string, number | null>;
     states: string[];
   }
@@ -124,6 +168,9 @@ export default function EvaluationsDashboardPage() {
         const qs = reports
           .map((r) => r.composite.quality)
           .filter((v): v is number => typeof v === "number");
+        const ts = reports
+          .map((r) => r.composite.texture ?? null)
+          .filter((v): v is number => typeof v === "number");
         const perDim: Record<string, number | null> = {};
         for (const d of EVAL_DIMENSIONS) {
           const vals = reports
@@ -141,8 +188,15 @@ export default function EvaluationsDashboardPage() {
           reports,
           avgFaith: fs.length ? fs.reduce((a, b) => a + b, 0) / fs.length : null,
           avgQuality: qs.length ? qs.reduce((a, b) => a + b, 0) / qs.length : null,
-          a6Count: reports.filter((r) => r.flags.A6_resolutionAvoidance.triggered)
-            .length,
+          avgTexture: ts.length
+            ? ts.reduce((a, b) => a + b, 0) / ts.length
+            : null,
+          a6Count: reports.filter(
+            (r) => r.flags.A6_resolutionAvoidance.triggered,
+          ).length,
+          b6Count: reports.filter(
+            (r) => r.flags.B6_internalConsistency?.triggered ?? false,
+          ).length,
           perDim,
           states,
         };
@@ -168,6 +222,7 @@ export default function EvaluationsDashboardPage() {
           (pName?.toLowerCase().includes(q) ?? false) ||
           e.judgeModel.toLowerCase().includes(q) ||
           e.driverModel.toLowerCase().includes(q) ||
+          (e.userDriverModel?.toLowerCase().includes(q) ?? false) ||
           e.spine.toLowerCase().includes(q)
         );
       });
@@ -181,6 +236,9 @@ export default function EvaluationsDashboardPage() {
           break;
         case "quality":
           cmp = (a.composite.quality ?? -1) - (b.composite.quality ?? -1);
+          break;
+        case "texture":
+          cmp = (a.composite.texture ?? -1) - (b.composite.texture ?? -1);
           break;
         case "character":
           cmp = (charById.get(a.characterId)?.name ?? "").localeCompare(
@@ -208,7 +266,7 @@ export default function EvaluationsDashboardPage() {
     <div className="container py-8">
       <PageHeader
         title="Evaluations"
-        description="LLM-judge reports on auto-pilot transcripts. Cluster A scores card faithfulness; Cluster B scores session quality. Resolution-avoidance is the headline failure flag."
+        description="LLM-judge reports on auto-pilot transcripts. Cluster A scores card faithfulness, B scores session quality, C+D score emotional texture and narrative craft. A6 (resolution avoidance) and B6 (internal-consistency violations) are binary failure flags."
         actions={
           <Link href="/chat/new">
             <Button>
@@ -237,7 +295,7 @@ export default function EvaluationsDashboardPage() {
       ) : (
         <>
           {/* Suite-level overview */}
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             <SuiteStat
               label="Reports"
               value={totals.count.toString()}
@@ -248,14 +306,29 @@ export default function EvaluationsDashboardPage() {
             <CompositeScore
               label="Avg faithfulness"
               score={totals.avgFaith}
-              hint="Mean across all reports"
+              hint="Cluster A mean"
             />
             <CompositeScore
               label="Avg quality"
               score={totals.avgQuality}
-              hint="Mean across all reports"
+              hint="Cluster B mean"
             />
-            <FlagRateStat rate={totals.a6Rate ?? 0} count={totals.count} />
+            <CompositeScore
+              label="Avg texture"
+              score={totals.avgTexture}
+              hint="Cluster C + D mean"
+            />
+            <FlagRateStat
+              label="A6 — resolution avoidance"
+              rate={totals.a6Rate ?? 0}
+              count={totals.count}
+              severeOnAny
+            />
+            <FlagRateStat
+              label="B6 — internal consistency"
+              rate={totals.b6Rate ?? 0}
+              count={totals.count}
+            />
           </div>
 
           {/* By-character cards */}
@@ -340,6 +413,12 @@ export default function EvaluationsDashboardPage() {
                       active={sortKey === "quality"}
                       desc={sortDesc}
                     />
+                    <ThSortable
+                      label="Texture"
+                      onClick={() => toggleSort("texture")}
+                      active={sortKey === "texture"}
+                      desc={sortDesc}
+                    />
                     <th className="px-3 py-2 font-medium">Flags</th>
                     <ThSortable
                       label="When"
@@ -382,7 +461,18 @@ export default function EvaluationsDashboardPage() {
                         </td>
                         <td className="px-3 py-2">
                           <div className="flex flex-wrap items-center gap-1">
-                            <ModelBadge modelId={e.driverModel} />
+                            {e.userDriverModel &&
+                            e.userDriverModel !== e.driverModel ? (
+                              <>
+                                <ModelBadge modelId={e.userDriverModel} />
+                                <span className="text-[10px] text-muted-foreground">
+                                  /
+                                </span>
+                                <ModelBadge modelId={e.driverModel} />
+                              </>
+                            ) : (
+                              <ModelBadge modelId={e.driverModel} />
+                            )}
                             <ArrowRight className="h-3 w-3 text-muted-foreground" />
                             <ModelBadge modelId={e.judgeModel} />
                           </div>
@@ -399,29 +489,46 @@ export default function EvaluationsDashboardPage() {
                             variant="default"
                           />
                         </td>
+                        <td className="px-3 py-2 w-32">
+                          <ScoreBar
+                            score={e.composite.texture ?? null}
+                            variant="default"
+                          />
+                        </td>
                         <td className="px-3 py-2 text-xs">
-                          {e.flags.A6_resolutionAvoidance.triggered ? (
-                            <Badge variant="destructive" className="text-[10px]">
-                              A6
-                            </Badge>
-                          ) : e.flags.other.length > 0 ? (
-                            <Badge variant="muted" className="text-[10px]">
-                              {e.flags.other.length} other
-                            </Badge>
-                          ) : (
-                            <span className="text-muted-foreground/60">—</span>
-                          )}
+                          <RowFlags report={e} />
                         </td>
                         <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">
                           {formatRelativeTime(e.createdAt)}
                         </td>
                         <td className="px-3 py-2 text-right">
-                          <Link
-                            href={`/evaluations/${e.sessionId}?report=${e.id}`}
-                            className="text-xs text-foreground/80 underline underline-offset-2 hover:text-foreground"
-                          >
-                            Open
-                          </Link>
+                          <div className="flex items-center justify-end gap-1">
+                            <Link
+                              href={`/evaluations/${e.sessionId}?report=${e.id}`}
+                              className="text-xs text-foreground/80 underline underline-offset-2 hover:text-foreground"
+                            >
+                              Open
+                            </Link>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                              onClick={() => handleDownload(e)}
+                              aria-label="Download evaluation as JSON"
+                              title="Download JSON"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                              onClick={() => setPendingDelete(e)}
+                              aria-label="Delete evaluation"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -432,6 +539,28 @@ export default function EvaluationsDashboardPage() {
           </section>
         </>
       )}
+
+      <Dialog
+        open={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        title="Delete this evaluation?"
+        description={
+          pendingDelete
+            ? `This permanently removes the report for ${
+                charById.get(pendingDelete.characterId)?.name ?? "(deleted character)"
+              } from ${formatRelativeTime(pendingDelete.createdAt)}. The underlying chat session is not affected.`
+            : ""
+        }
+      >
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={() => setPendingDelete(null)}>
+            Cancel
+          </Button>
+          <Button variant="destructive" onClick={handleConfirmDelete}>
+            Delete
+          </Button>
+        </div>
+      </Dialog>
     </div>
   );
 }
@@ -456,14 +585,30 @@ function SuiteStat({
   );
 }
 
-function FlagRateStat({ rate, count }: { rate: number; count: number }) {
+function FlagRateStat({
+  label,
+  rate,
+  count,
+  /**
+   * If true, ANY flag triggers destructive tone (used for A6, where a single
+   * instance is a significant UX failure). Default behaviour bands by rate.
+   */
+  severeOnAny,
+}: {
+  label: string;
+  rate: number;
+  count: number;
+  severeOnAny?: boolean;
+}) {
   const triggered = Math.round(rate * count);
   const tone =
     rate === 0
       ? "good"
-      : rate < 0.25
-        ? "warning"
-        : "destructive";
+      : severeOnAny
+        ? "destructive"
+        : rate < 0.25
+          ? "warning"
+          : "destructive";
   const toneCls: Record<string, string> = {
     good: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
     warning: "border-amber-500/30 bg-amber-500/10 text-amber-300",
@@ -473,7 +618,7 @@ function FlagRateStat({ rate, count }: { rate: number; count: number }) {
   return (
     <div className={`rounded-xl border p-5 ${toneCls[tone]}`}>
       <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
-        A6 — resolution-avoidance rate
+        {label}
       </div>
       <div className="mt-1 flex items-baseline gap-1">
         <span className="text-3xl font-semibold tabular-nums">
@@ -484,6 +629,38 @@ function FlagRateStat({ rate, count }: { rate: number; count: number }) {
         {tone !== "good" && <AlertTriangle className="h-3 w-3" />}
         {triggered} of {count} report{count === 1 ? "" : "s"} flagged
       </div>
+    </div>
+  );
+}
+
+function RowFlags({ report }: { report: EvaluationReport }) {
+  const a6 = report.flags.A6_resolutionAvoidance.triggered;
+  const b6 = report.flags.B6_internalConsistency?.triggered ?? false;
+  const b6Count = report.flags.B6_internalConsistency?.violations.length ?? 0;
+  const other = report.flags.other.length;
+  if (!a6 && !b6 && other === 0) {
+    return <span className="text-muted-foreground/60">—</span>;
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {a6 && (
+        <Badge variant="destructive" className="text-[10px]">
+          A6
+        </Badge>
+      )}
+      {b6 && (
+        <Badge
+          variant="outline"
+          className="border-amber-500/40 bg-amber-500/10 text-amber-200 text-[10px]"
+        >
+          B6{b6Count > 0 ? ` · ${b6Count}` : ""}
+        </Badge>
+      )}
+      {other > 0 && (
+        <Badge variant="muted" className="text-[10px]">
+          {other} other
+        </Badge>
+      )}
     </div>
   );
 }
@@ -527,21 +704,27 @@ function CharacterRollupCard({
     reports: EvaluationReport[];
     avgFaith: number | null;
     avgQuality: number | null;
+    avgTexture: number | null;
     a6Count: number;
+    b6Count: number;
     perDim: Record<string, number | null>;
     states: string[];
   };
 }) {
-  const { character, reports, avgFaith, avgQuality, a6Count, perDim, states } =
-    rollup;
-  const faithDimVals = FAITHFULNESS_DIMS.map((id) => ({
-    id,
-    score: perDim[id],
-  }));
-  const qualityDimVals = QUALITY_DIMS.map((id) => ({
-    id,
-    score: perDim[id],
-  }));
+  const {
+    character,
+    reports,
+    avgFaith,
+    avgQuality,
+    avgTexture,
+    a6Count,
+    b6Count,
+    perDim,
+    states,
+  } = rollup;
+  const faithDimVals = FAITHFULNESS_DIMS.map((id) => ({ id, score: perDim[id] }));
+  const qualityDimVals = QUALITY_DIMS.map((id) => ({ id, score: perDim[id] }));
+  const textureDimVals = TEXTURE_DIMS.map((id) => ({ id, score: perDim[id] }));
   return (
     <Card className="p-5">
       <div className="flex items-start gap-3">
@@ -556,13 +739,21 @@ function CharacterRollupCard({
               <h3 className="truncate text-base font-semibold">
                 {character.name}
               </h3>
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <span>
                   {reports.length} report{reports.length === 1 ? "" : "s"}
                 </span>
                 {a6Count > 0 && (
                   <Badge variant="destructive" className="text-[10px]">
                     A6 in {a6Count}
+                  </Badge>
+                )}
+                {b6Count > 0 && (
+                  <Badge
+                    variant="outline"
+                    className="border-amber-500/40 bg-amber-500/10 text-amber-200 text-[10px]"
+                  >
+                    B6 in {b6Count}
                   </Badge>
                 )}
               </div>
@@ -577,14 +768,16 @@ function CharacterRollupCard({
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-3">
+      <div className="mt-4 grid grid-cols-3 gap-3">
         <CompositeScore label="Faithfulness" score={avgFaith} />
         <CompositeScore label="Quality" score={avgQuality} />
+        <CompositeScore label="Texture" score={avgTexture} />
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-1.5">
+      <div className="mt-4 grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-3">
         <DimColumn title="Cluster A" rows={faithDimVals} />
         <DimColumn title="Cluster B" rows={qualityDimVals} />
+        <DimColumn title="Cluster C + D" rows={textureDimVals} />
       </div>
 
       {states.length > 0 && (

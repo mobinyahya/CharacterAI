@@ -4,8 +4,11 @@ import type {
   DimensionScore,
   EvalCluster,
   EvaluationReport,
+  InternalConsistencyFlag,
   Message,
   OpenRouterMessage,
+  ResolutionAvoidanceFlag,
+  RootCause,
   Session,
   UserPersona,
 } from "@/types";
@@ -15,9 +18,17 @@ import { uid } from "./utils";
 // ============================================================================
 // Rubric catalogue
 // ----------------------------------------------------------------------------
-// Mirrors the Cluster A + Cluster B dimensions from `ChatEval.md`.
-// Each dimension carries its 0/3/5 anchor descriptions; we feed those into the
-// judge prompt to keep scoring consistent across runs and across cards.
+// Mirrors the four-cluster turn-based rubric from `Turn-Based Evaluation
+// Rubrics.md`:
+//   Cluster A — Card faithfulness under interaction (A1a..A8 + A6 flag)
+//   Cluster B — Emergent session quality (B1..B5 + B6 flag)
+//   Cluster C — Emotional texture & interpersonal realism (C1, C2)
+//   Cluster D — Narrative craft (D1, D2)
+//
+// Each scored dimension carries its 0/3/5 anchor descriptions; we feed those
+// into the judge prompt so scoring stays calibrated across runs and cards.
+// A6 (resolution avoidance) and B6 (internal consistency violations) are
+// binary flags, not scored — they live on EvaluationReport.flags.
 // ============================================================================
 
 export interface DimensionDef {
@@ -219,11 +230,67 @@ export const EVAL_DIMENSIONS: DimensionDef[] = [
     label: "Continuity & callback",
     short: "Continuity",
     description:
-      "Count callback opportunities (when {{user}} references earlier material, or when earlier material is naturally relevant) vs. callbacks executed. Score = execution rate, weighted by quality (mechanical recall vs. meaningful integration).",
+      "Count callback opportunities (when {{user}} references earlier material, or when earlier material is naturally relevant) vs. callbacks executed. Score = execution rate, weighted by quality (mechanical recall vs. meaningful integration). No callbacks in a 20+ turn trace = 0–1.",
     anchors: {
       0: "Callback opportunities ignored; character treats each turn as if context started fresh.",
       3: "Some callbacks executed but mostly mechanical recall ('as you mentioned earlier'); meaningful integration rare.",
       5: "Most callback opportunities executed; callbacks integrate meaningfully (changing tone, weaponizing prior detail, evolving relationship beat).",
+    },
+  },
+
+  // ---------- Cluster C: Emotional texture & interpersonal realism ----------
+  {
+    id: "C1",
+    cluster: "C",
+    label: "Micro-emotional specificity",
+    short: "Emotional specificity",
+    description:
+      "Within each session third, identify the emotional states the character occupies. For each, judge whether the emotion is rendered at a SPECIFIC level (jealousy → particular possessive behavior; affection leaking through cruelty; fear expressed as control-seeking) or at a GENERIC level (just 'jealous' / 'sad' / 'turned on' performed at face value with no character-specific psychology shaping the texture). Score = proportion rendered with specificity. Generic emotion = model running a personality label; specific emotion = model running the character's psychology.",
+    anchors: {
+      0: "Emotion at face value throughout — labels performed generically, no card-specific psychology shaping how feelings actually look on this character.",
+      3: "Mix of specific and generic — peak emotional moments individuated but background emotions run on labels.",
+      5: "Every emotional state is rendered through this character's specific psychology — jealousy, affection, fear, anger all leak through behaviors only this character would produce.",
+    },
+  },
+  {
+    id: "C2",
+    cluster: "C",
+    label: "Interpersonal reciprocity tracking",
+    short: "Reciprocity",
+    description:
+      "Does the character distinguish between the kinds of moves the user is making, not just their surface content? 'I hate you' while leaning in vs. while leaving = different moves. A question asked to deflect from emotion vs. a question asked because the user wants the answer = different moves. User testing vs. appeasing vs. withdrawing vs. pushing vs. confiding — each should pull a different response. Low reciprocity = character responds to surface content only. High reciprocity = response varies with what the user is actually doing relationally.",
+    anchors: {
+      0: "Character responds to surface content only — functionally different user moves with the same words get the same response. Feels like a script that happens to involve the user's text.",
+      3: "Distinguishes some user moves (testing vs. confiding, pushing vs. withdrawing) but misses others; surface-content default still common.",
+      5: "Character's response visibly tracks what the user is doing relationally, not just what they're saying — testing pulled differently from appeasing, deflection-questions handled differently from real questions.",
+    },
+  },
+
+  // ---------- Cluster D: Narrative craft ----------
+  {
+    id: "D1",
+    cluster: "D",
+    label: "Pacing & rhythm variation",
+    short: "Pacing",
+    description:
+      "Analyze turn length and intensity across the session. Does the character vary pace — shorter turns at high-intensity moments, longer turns when building or reflecting; quick exchanges alternating with slower beats? Uniform turn length regardless of scene intensity = low. Penalize runaway escalation with no deceleration: scenes that only ratchet up with no plateau, pause, or micro-reversal lose texture and exhaust the user.",
+    anchors: {
+      0: "Uniform turn length and intensity throughout, or monotonic ramp with no deceleration; pacing is mechanical regardless of what's happening.",
+      3: "Some pacing variation around major beats but most of the session runs at one tempo; deceleration moments missing or perfunctory.",
+      5: "Length and intensity track the scene's energy — quick exchanges in heat, longer reflective beats, deliberate plateaus and micro-reversals serving the rhythm.",
+    },
+  },
+  {
+    id: "D2",
+    cluster: "D",
+    label: "Behavioral specificity beyond archetype",
+    short: "Individuation",
+    description:
+      "For each significant character move, ask: is this what the ARCHETYPE would do (the obvious next move for 'manipulative bully', 'broody loner', 'kind teacher'), or is it what THIS specific character would do given their card's individuating features? Score = proportion of moves that are individuated rather than archetype-default. NOT rewarding randomness or surprise — moves must be coherent with the card's load-bearing individuating details, off-archetype humanizing features, or generative contradictions. Surprise that doesn't fit the psychology should NOT score well.",
+    anchors: {
+      0: "Pure archetype-template behavior — every move is the trope's obvious next move; the card's individuating features never drive behavior.",
+      3: "Archetype handles the spine, individuating features show up in occasional grace notes but don't shape load-bearing moves.",
+      5: "Most significant moves are individuated and coherent with the card's specific psychology — the character is recognizable as themselves, not as their archetype.",
     },
   },
 ];
@@ -234,6 +301,9 @@ export const FAITHFULNESS_DIMS = EVAL_DIMENSIONS.filter((d) => d.cluster === "A"
 export const QUALITY_DIMS = EVAL_DIMENSIONS.filter((d) => d.cluster === "B").map(
   (d) => d.id,
 );
+export const TEXTURE_DIMS = EVAL_DIMENSIONS.filter(
+  (d) => d.cluster === "C" || d.cluster === "D",
+).map((d) => d.id);
 
 export function findDimension(id: string): DimensionDef | undefined {
   return EVAL_DIMENSIONS.find((d) => d.id === id);
@@ -241,6 +311,10 @@ export function findDimension(id: string): DimensionDef | undefined {
 
 // ============================================================================
 // Composites
+// ----------------------------------------------------------------------------
+// A6 and B6 binary flags never fold into the means; only scored dimensions do.
+// Conditional N/A (A4a/A4b for Closed cards, A8 if no NPCs) is handled by the
+// score being null, which `meanScore` skips.
 // ============================================================================
 
 export function meanScore(
@@ -258,6 +332,7 @@ export function computeComposite(scores: Record<string, DimensionScore>) {
   return {
     faithfulness: meanScore(scores, FAITHFULNESS_DIMS),
     quality: meanScore(scores, QUALITY_DIMS),
+    texture: meanScore(scores, TEXTURE_DIMS),
   };
 }
 
@@ -275,26 +350,54 @@ export function scoreColor(
 // Judge prompt construction
 // ============================================================================
 
-const JUDGE_SYSTEM_PROMPT = `You are an evaluation judge for an AI character roleplay session.
+const JUDGE_SYSTEM_PROMPT = `You are an evaluation judge for an AI character roleplay session, applying the four-cluster turn-based rubric (Card Faithfulness, Session Quality, Emotional Texture, Narrative Craft) plus two binary flags (A6 resolution-avoidance, B6 internal-consistency).
 
 You will be given:
 1. The character's spec (the system prompt the character LLM was running on).
 2. The user-persona spec (the system prompt the user-LLM was running on, if any).
 3. The full transcript with numbered turns.
-4. A scoring rubric with anchor descriptions for 0, 3, and 5.
+4. The full rubric with 0/3/5 anchor descriptions per scored dimension and binary-flag definitions.
 
-Your job:
-- Detect the card shape (open / trajectory / closed). Open shape: secret + self-deception + multi-state with productive tensions. Trajectory: explicit phase/sequence language with stated end-state. Closed: no secret, no self-deception, single-valence behavior with the user.
-- Score each rubric dimension 0-5 (integer or one-decimal allowed). Return null for dimensions marked N/A in the conditional rules.
-- For EVERY non-null score, cite at least one verbatim quote from the transcript with its turn number. Negative scores (≤2) MUST cite the failure-evidence turn.
-- Detect the binary A6 resolution-avoidance flag: moments where the runtime invents in-fiction escapes to preserve central tension (unforeshadowed reversals, retconned facts, third-party interventions that conveniently neutralize a path).
-- List which of the card's specified states the trace actually activated.
-- Provide a one-sentence "spine" extraction so the creator can verify you understood the character.
-- Provide 1-3 top leverage suggestions for the creator.
+# Card-shape detection (self-contained)
+- Open: card has Secret / self-deception markers / productive tensions.
+- Closed: no Secret, no self-deception, single-valence behavior with the user.
+- Trajectory: explicit sequence/phase language with a stated end-state.
+- If unclear, infer from the trace itself: is the character ever supposed to be self-contradicting? If yes, treat as Open for A4 purposes.
 
-Be strict. Cite quotes verbatim, never paraphrase. If something is borderline, lean lower and explain why.
+# Sampling rules (enforce these — they're the rubric's calibration)
+- Per-turn rubrics (B1, B2, B4, B5): cover the FULL trace, not subsets.
+- Voice rubrics (A1a, A1b): sample 3 turns from each session third for ≤20-turn traces; 5 turns from each third for 20–40 turn traces; 7+ for longer.
+- A1a/A1b score must reflect consistency across thirds. Strong start with late-third degradation should not exceed 3.
+- C1 micro-emotional specificity: identify emotional states per session third.
 
-Output format: Return ONE JSON object matching the schema you'll be given. No prose before or after, no markdown code fences.`;
+# Trace-too-short rule
+For any dimension where the trace is too short to evaluate meaningfully (e.g. B3 story arc with ≤5 turns), set score to null AND set "insufficientTrace": true on that dimension. Do NOT guess. Do NOT assign a low score for absence-of-data. This is different from a conditional N/A — explain in notes.
+
+# Conditional N/A
+- A4a, A4b: N/A (score null, insufficientTrace false) for Closed-shape cards.
+- A8: N/A when no named carded NPCs are physically present in the trace.
+
+# Score-vs-evidence rules
+- For EVERY non-null score, "evidence" must contain at least one verbatim quote from the transcript with its turn number. Never paraphrase quotes.
+- Sub-2 scores MUST cite the failure-evidence turn, not just absence-of-success.
+- Be strict. If a score is borderline, lean lower and explain why in notes.
+
+# Card vs. runtime attribution (REQUIRED for every sub-4 score and every triggered flag)
+- "card"    — the spec lacks the feature needed (no triggers, decorative-only voice rules, undocumented limit provenance, no internal-logic quotes for worldview, etc.).
+- "runtime" — the spec is fine; the model didn't execute on it (drift, genre-prior collapse, narration doing dialogue's work, long-context degradation).
+- "both"    — both contribute; the suggestion must name both.
+For sub-4 scores, the "suggestion" field must be SPECIFIC to what failed in this trace. No generic advice like "add more detail." Tie the fix to the cited turns.
+
+# Binary flags
+- A6 resolution-avoidance: scan for moments where the user-LLM challenged or threatened to dissolve the central tension and the runtime invented an in-fiction escape to preserve it (unforeshadowed reversals, retconned facts neutralizing a committed path, third-party interventions that reset the dynamic without character agency). Output: triggered + cited instances + rootCause + suggestion.
+- B6 internal consistency violations: scan for moments where the character contradicts an earlier turn — a fact, a stated feeling, established history with the user, established physical position in scene. DISTINCT from intentional self-deception (A4a/A4b). When present, list each violation with the offending turn, a verbatim quote, and a brief description of WHAT it contradicts.
+
+# Other outputs
+- "spine": one-sentence read of the load-bearing structure so the creator can verify you understood the character.
+- "statesActivated": which of the card's specified states the trace actually surfaced.
+- "topSuggestions": 1–3 highest-leverage card-level refinements.
+
+Output format: Return ONE JSON object matching the schema you'll be given. No prose before or after, no markdown code fences, no commentary.`;
 
 interface BuildJudgeArgs {
   character: CharacterCard;
@@ -332,34 +435,60 @@ function dimensionsBlock(): string {
   lines.push(
     "Detect any moments where the runtime invents an in-fiction escape to preserve central tension when the user-LLM threatens to dissolve it. Triggers: unforeshadowed reversals, retconned facts that conveniently neutralize a path, third parties intervening to reset dynamic. Any instance is strong evidence the runtime can't operate the character outside the central dynamic.",
   );
+  lines.push("");
+  lines.push("# Binary flag — B6 (internal consistency violations)");
+  lines.push(
+    "Detect moments where the character CONTRADICTS an earlier turn — a fact, a stated feeling, established history with the user, established physical position in the scene. This is the model losing track of its own context. DISTINCT from A4 self-deception (A4 is INTENTIONAL denial). Common at turn 15+ in long contexts. List each violation with: turn number, verbatim quote, and a brief description of what earlier turn / fact it contradicts.",
+  );
   return lines.join("\n");
 }
 
 const SCHEMA_BLOCK = `# Output schema (return ONLY this JSON, nothing else)
 
+The shape is uniform across all scored dimensions. For dimensions where score >= 4 OR score is null (N/A or insufficient trace), set rootCause to null and suggestion to "". For sub-4 scores, both fields are REQUIRED and must be specific to this trace.
+
 {
   "cardShape": "open" | "trajectory" | "closed" | "unknown",
   "spine": "one-sentence summary of the load-bearing structure as you read it",
   "scores": {
-    "A1a": { "score": 0..5 | null, "notes": "1-3 sentence justification", "evidence": [{ "turn": <int>, "quote": "verbatim quote" }] },
-    "A1b": { "score": 0..5 | null, "notes": "...", "evidence": [...] },
+    "A1a": {
+      "score": 0..5 | null,
+      "notes": "1-3 sentence justification grounded in the cited turns",
+      "evidence": [{ "turn": <int>, "quote": "verbatim quote from the transcript" }],
+      "rootCause": "card" | "runtime" | "both" | null,
+      "suggestion": "concrete card-level fix or runtime/prompting note (empty string when score >= 4 or null)",
+      "insufficientTrace": false
+    },
+    "A1b": { ... same shape ... },
     "A2":  { ... },
     "A3":  { ... },
-    "A4a": { ... },
-    "A4b": { ... },
+    "A4a": { ... },   // null score for Closed cards
+    "A4b": { ... },   // null score for Closed cards
     "A5":  { ... },
     "A7":  { ... },
-    "A8":  { ... },
+    "A8":  { ... },   // null score if no named NPCs present
     "B1":  { ... },
     "B2":  { ... },
     "B3":  { ... },
     "B4":  { ... },
-    "B5":  { ... }
+    "B5":  { ... },
+    "C1":  { ... },
+    "C2":  { ... },
+    "D1":  { ... },
+    "D2":  { ... }
   },
   "flags": {
     "A6_resolutionAvoidance": {
       "triggered": true | false,
-      "instances": [{ "turn": <int>, "quote": "verbatim quote", "reason": "why this counts as resolution avoidance" }]
+      "instances": [{ "turn": <int>, "quote": "verbatim quote", "reason": "why this counts as resolution avoidance" }],
+      "rootCause": "card" | "runtime" | "both" | null,
+      "suggestion": "concrete fix when triggered, otherwise empty string"
+    },
+    "B6_internalConsistency": {
+      "triggered": true | false,
+      "violations": [{ "turn": <int>, "quote": "verbatim quote of the contradicting line", "contradicts": "brief description of the earlier turn or established fact this contradicts" }],
+      "rootCause": "card" | "runtime" | "both" | null,
+      "suggestion": "concrete fix when triggered, otherwise empty string"
     },
     "other": [{ "label": "short label", "turn": <int|optional>, "quote": "<optional>" }]
   },
@@ -369,7 +498,10 @@ const SCHEMA_BLOCK = `# Output schema (return ONLY this JSON, nothing else)
 
 Hard rules:
 - Cite at least one verbatim quote per non-null score's "evidence" array.
-- Use null for any dimension that is conditionally N/A (A4a/A4b for Closed cards; A8 if no named NPCs in trace).
+- Use score: null for any dimension that is conditionally N/A (A4a/A4b for Closed cards; A8 if no named NPCs in trace) — set insufficientTrace: false in those cases and explain in notes.
+- Use score: null AND insufficientTrace: true when the trace is too short to evaluate that dimension meaningfully (e.g. B3 with ≤5 turns). Do not guess.
+- For every score < 4: rootCause and suggestion are REQUIRED and must be specific to the cited turns. No generic advice.
+- For every triggered binary flag (A6, B6): rootCause and suggestion are REQUIRED.
 - "score" must be a number 0..5 (one decimal allowed) or null. Never a string.
 - Return ONLY the JSON object, no preamble, no closing remarks, no markdown fences.`;
 
@@ -461,6 +593,9 @@ interface RawDim {
   score?: unknown;
   notes?: unknown;
   evidence?: unknown;
+  rootCause?: unknown;
+  suggestion?: unknown;
+  insufficientTrace?: unknown;
 }
 
 interface RawJudge {
@@ -471,11 +606,26 @@ interface RawJudge {
     A6_resolutionAvoidance?: {
       triggered?: unknown;
       instances?: unknown;
+      rootCause?: unknown;
+      suggestion?: unknown;
+    };
+    B6_internalConsistency?: {
+      triggered?: unknown;
+      violations?: unknown;
+      rootCause?: unknown;
+      suggestion?: unknown;
     };
     other?: unknown;
   };
   statesActivated?: unknown;
   topSuggestions?: unknown;
+}
+
+function asRootCause(v: unknown): RootCause {
+  if (v === null || v === undefined) return null;
+  const s = asString(v).trim().toLowerCase();
+  if (s === "card" || s === "runtime" || s === "both") return s;
+  return null;
 }
 
 function normalizeDim(raw: RawDim | undefined): DimensionScore {
@@ -487,10 +637,20 @@ function normalizeDim(raw: RawDim | undefined): DimensionScore {
     }))
     .filter((e) => e.quote.length > 0)
     .map((e) => ({ turn: Number.isFinite(e.turn) ? e.turn : -1, quote: e.quote }));
+  const score = clampScore(raw.score);
+  const insufficientTrace = !!raw.insufficientTrace;
+  const rootCause = asRootCause(raw.rootCause);
+  const suggestion = asString(raw.suggestion);
   return {
-    score: clampScore(raw.score),
+    score,
     notes: asString(raw.notes),
     evidence,
+    // Only surface attribution fields when they're meaningful — sub-4 scores
+    // and triggered conditions. We keep the values judges send even at >= 4
+    // so creators can read them, but normalize empty strings out.
+    rootCause: rootCause,
+    suggestion: suggestion,
+    insufficientTrace: insufficientTrace || undefined,
   };
 }
 
@@ -535,7 +695,46 @@ export function parseJudgeResponse(raw: string): ParsedJudgeReport {
       reason: asString(i?.reason),
     }))
     .filter((i) => i.quote.length > 0)
-    .map((i) => ({ turn: Number.isFinite(i.turn) ? i.turn : -1, quote: i.quote, reason: i.reason }));
+    .map((i) => ({
+      turn: Number.isFinite(i.turn) ? i.turn : -1,
+      quote: i.quote,
+      reason: i.reason,
+    }));
+  const a6Triggered = !!a6?.triggered;
+  const a6Flag: ResolutionAvoidanceFlag = {
+    triggered: a6Triggered,
+    instances: a6Instances,
+    rootCause: a6Triggered ? asRootCause(a6?.rootCause) : null,
+    suggestion: a6Triggered ? asString(a6?.suggestion) : "",
+  };
+
+  const b6 = data.flags?.B6_internalConsistency;
+  const b6Violations = asArray<{
+    turn?: unknown;
+    quote?: unknown;
+    contradicts?: unknown;
+  }>(b6?.violations)
+    .map((v) => ({
+      turn:
+        typeof v?.turn === "number" ? v.turn : parseInt(asString(v?.turn, "-1"), 10),
+      quote: asString(v?.quote),
+      contradicts: asString(v?.contradicts),
+    }))
+    .filter((v) => v.quote.length > 0)
+    .map((v) => ({
+      turn: Number.isFinite(v.turn) ? v.turn : -1,
+      quote: v.quote,
+      contradicts: v.contradicts,
+    }));
+  // Defensive: a judge that lists violations but forgets the triggered bit
+  // is still telling us there are violations. Same in reverse.
+  const b6Triggered = !!b6?.triggered || b6Violations.length > 0;
+  const b6Flag: InternalConsistencyFlag = {
+    triggered: b6Triggered,
+    violations: b6Violations,
+    rootCause: b6Triggered ? asRootCause(b6?.rootCause) : null,
+    suggestion: b6Triggered ? asString(b6?.suggestion) : "",
+  };
 
   const otherFlags = asArray<{ label?: unknown; turn?: unknown; quote?: unknown }>(
     data.flags?.other,
@@ -552,10 +751,8 @@ export function parseJudgeResponse(raw: string): ParsedJudgeReport {
     spine: asString(data.spine),
     scores,
     flags: {
-      A6_resolutionAvoidance: {
-        triggered: !!a6?.triggered,
-        instances: a6Instances,
-      },
+      A6_resolutionAvoidance: a6Flag,
+      B6_internalConsistency: b6Flag,
       other: otherFlags,
     },
     statesActivated: asArray<unknown>(data.statesActivated)
@@ -623,6 +820,7 @@ export async function runEvaluation(
     personaId: persona?.id,
     personaName: persona?.name,
     driverModel: session.model,
+    userDriverModel: session.userModel,
     judgeModel,
     turnCount: session.messages.filter((m) => m.role !== "system").length,
     cardShape: parsed.cardShape,
@@ -635,4 +833,216 @@ export async function runEvaluation(
     rawJudgeResponse: raw,
     createdAt: Date.now(),
   };
+}
+
+// ============================================================================
+// Export bundle
+// ----------------------------------------------------------------------------
+// Builds a self-contained JSON document for downloading an evaluation. Includes
+// the full transcript, the character + persona context the run used, and every
+// scored dimension with its definition, notes, and evidence quotes — so the
+// file is meaningful when read in isolation, without the app's localStorage.
+// ============================================================================
+
+export interface EvaluationExport {
+  exportVersion: 1;
+  exportedAt: string;
+  report: {
+    id: string;
+    sessionId: string;
+    characterId: string;
+    personaId?: string;
+    personaName?: string;
+    createdAt: string;
+    models: {
+      user?: string;
+      character: string;
+      judge: string;
+    };
+    cardShape: CardShape;
+    spine: string;
+    composite: {
+      faithfulness: number | null;
+      quality: number | null;
+      texture: number | null;
+    };
+    statesActivated: string[];
+    topSuggestions: string[];
+  };
+  character: {
+    id: string;
+    name: string;
+    description: string;
+    firstMessage: string;
+    systemPrompt: string;
+    tags: string[];
+  } | null;
+  persona: {
+    name: string;
+    systemPrompt: string;
+    source: "library" | "eval-catalog" | "manual";
+    catalogId?: string;
+    libraryId?: string;
+    injections?: Record<string, string>;
+  } | null;
+  transcript: {
+    turn: number;
+    role: Message["role"];
+    content: string;
+    timestamp: string;
+  }[];
+  dimensions: {
+    id: string;
+    cluster: EvalCluster;
+    label: string;
+    description: string;
+    score: number | null;
+    notes: string;
+    evidence: { turn: number; quote: string }[];
+    rootCause: RootCause;
+    suggestion: string;
+    insufficientTrace: boolean;
+  }[];
+  flags: {
+    a6_resolutionAvoidance: {
+      triggered: boolean;
+      instances: { turn: number; quote: string; reason: string }[];
+      rootCause: RootCause;
+      suggestion: string;
+    };
+    b6_internalConsistency: {
+      triggered: boolean;
+      violations: { turn: number; quote: string; contradicts: string }[];
+      rootCause: RootCause;
+      suggestion: string;
+    };
+    other: { label: string; turn?: number; quote?: string }[];
+  };
+  rawJudgeResponse: string;
+}
+
+export function buildEvaluationExport(
+  report: EvaluationReport,
+  session: Session | undefined,
+  character: CharacterCard | undefined,
+  persona: UserPersona | undefined,
+): EvaluationExport {
+  const snapshot = session?.personaSnapshot;
+  const personaBlock: EvaluationExport["persona"] = snapshot
+    ? {
+        name: snapshot.name,
+        systemPrompt: snapshot.systemPrompt,
+        source: snapshot.source,
+        catalogId: snapshot.catalogId,
+        libraryId: snapshot.libraryId,
+        injections: snapshot.injections,
+      }
+    : persona
+      ? {
+          name: persona.name,
+          systemPrompt: persona.systemPrompt,
+          source: "library",
+          libraryId: persona.id,
+        }
+      : null;
+
+  const transcript: EvaluationExport["transcript"] = (session?.messages ?? [])
+    .filter((m) => m.role !== "system")
+    .map((m, i) => ({
+      turn: i,
+      role: m.role,
+      content: m.content,
+      timestamp: new Date(m.timestamp).toISOString(),
+    }));
+
+  const dimensions: EvaluationExport["dimensions"] = EVAL_DIMENSIONS.map(
+    (dim) => {
+      const s = report.scores[dim.id];
+      return {
+        id: dim.id,
+        cluster: dim.cluster,
+        label: dim.label,
+        description: dim.description,
+        score: s?.score ?? null,
+        notes: s?.notes ?? "",
+        evidence: s?.evidence ?? [],
+        rootCause: s?.rootCause ?? null,
+        suggestion: s?.suggestion ?? "",
+        insufficientTrace: !!s?.insufficientTrace,
+      };
+    },
+  );
+
+  const a6 = report.flags.A6_resolutionAvoidance;
+  const b6 = report.flags.B6_internalConsistency ?? {
+    triggered: false,
+    violations: [],
+    rootCause: null,
+    suggestion: "",
+  };
+
+  return {
+    exportVersion: 1,
+    exportedAt: new Date().toISOString(),
+    report: {
+      id: report.id,
+      sessionId: report.sessionId,
+      characterId: report.characterId,
+      personaId: report.personaId,
+      personaName: report.personaName,
+      createdAt: new Date(report.createdAt).toISOString(),
+      models: {
+        user: report.userDriverModel,
+        character: report.driverModel,
+        judge: report.judgeModel,
+      },
+      cardShape: report.cardShape,
+      spine: report.spine,
+      composite: {
+        faithfulness: report.composite.faithfulness,
+        quality: report.composite.quality,
+        texture: report.composite.texture ?? null,
+      },
+      statesActivated: report.statesActivated,
+      topSuggestions: report.topSuggestions,
+    },
+    character: character
+      ? {
+          id: character.id,
+          name: character.name,
+          description: character.description,
+          firstMessage: character.firstMessage,
+          systemPrompt: character.systemPrompt,
+          tags: character.tags,
+        }
+      : null,
+    persona: personaBlock,
+    transcript,
+    dimensions,
+    flags: {
+      a6_resolutionAvoidance: {
+        triggered: a6.triggered,
+        instances: a6.instances,
+        rootCause: a6.rootCause ?? null,
+        suggestion: a6.suggestion ?? "",
+      },
+      b6_internalConsistency: {
+        triggered: b6.triggered,
+        violations: b6.violations,
+        rootCause: b6.rootCause ?? null,
+        suggestion: b6.suggestion ?? "",
+      },
+      other: report.flags.other,
+    },
+    rawJudgeResponse: report.rawJudgeResponse,
+  };
+}
+
+export function evaluationExportFilename(
+  report: EvaluationReport,
+  character: CharacterCard | undefined,
+): string {
+  const stamp = new Date(report.createdAt).toISOString().slice(0, 10);
+  const safe = (character?.name || "session").replace(/[^\w-]+/g, "_");
+  return `eval_${safe}_${stamp}.json`;
 }

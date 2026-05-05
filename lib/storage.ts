@@ -1,6 +1,7 @@
 import type {
   AppConfig,
   CharacterCard,
+  EvaluationReport,
   Message,
   PromptPreset,
   Session,
@@ -8,6 +9,7 @@ import type {
 } from "@/types";
 import { DEFAULT_MODEL } from "@/types";
 import { buildSeedCharacters } from "./seedData";
+import { buildSeedPersonas } from "./seedPersonas";
 import { buildSeedPromptPresets } from "./seedPrompts";
 
 const KEYS = {
@@ -16,6 +18,7 @@ const KEYS = {
   sessions: "charai.sessions.v1",
   config: "charai.config.v1",
   prompts: "charai.prompts.v1",
+  evaluations: "charai.evaluations.v1",
 } as const;
 
 const isBrowser = () => typeof window !== "undefined";
@@ -84,6 +87,10 @@ export function deleteCharacter(id: string): void {
   writeJSON(KEYS.characters, all);
   const remainingSessions = getSessions().filter((s) => s.characterId !== id);
   writeJSON(KEYS.sessions, remainingSessions);
+  const remainingEvals = readJSON<EvaluationReport[]>(KEYS.evaluations, []).filter(
+    (e) => e.characterId !== id,
+  );
+  writeJSON(KEYS.evaluations, remainingEvals);
 }
 
 // ---------- Personas ----------
@@ -112,6 +119,31 @@ export function savePersona(persona: UserPersona): UserPersona {
 export function deletePersona(id: string): void {
   const all = getPersonas().filter((p) => p.id !== id);
   writeJSON(KEYS.personas, all);
+}
+
+/**
+ * Resolves the persona for a session. Prefers the embedded `personaSnapshot`
+ * (set by the /evaluate runner with a resolved eval-catalog persona) and falls
+ * back to the library lookup via `personaId`. Returns undefined for manual chats.
+ */
+export function resolveSessionPersona(session: Session): UserPersona | undefined {
+  if (session.personaSnapshot) {
+    return {
+      id:
+        session.personaSnapshot.libraryId ??
+        (session.personaSnapshot.catalogId
+          ? `eval-${session.personaSnapshot.catalogId}-${session.id}`
+          : `snap-${session.id}`),
+      name: session.personaSnapshot.name,
+      systemPrompt: session.personaSnapshot.systemPrompt,
+      createdAt: session.createdAt,
+      updatedAt: session.createdAt,
+    };
+  }
+  if (session.personaId) {
+    return getPersona(session.personaId);
+  }
+  return undefined;
 }
 
 // ---------- Sessions ----------
@@ -162,6 +194,10 @@ export function updateSessionMessages(
 export function deleteSession(id: string): void {
   const all = readJSON<Session[]>(KEYS.sessions, []).filter((s) => s.id !== id);
   writeJSON(KEYS.sessions, all);
+  const remainingEvals = readJSON<EvaluationReport[]>(KEYS.evaluations, []).filter(
+    (e) => e.sessionId !== id,
+  );
+  writeJSON(KEYS.evaluations, remainingEvals);
 }
 
 // ---------- Prompt presets ----------
@@ -192,6 +228,53 @@ export function deletePromptPreset(id: string): void {
   writeJSON(KEYS.prompts, all);
 }
 
+// ---------- Evaluations ----------
+
+export function getEvaluations(): EvaluationReport[] {
+  return readJSON<EvaluationReport[]>(KEYS.evaluations, []).sort(
+    (a, b) => b.createdAt - a.createdAt,
+  );
+}
+
+export function getEvaluation(id: string): EvaluationReport | undefined {
+  return getEvaluations().find((e) => e.id === id);
+}
+
+export function getEvaluationsForSession(sessionId: string): EvaluationReport[] {
+  return getEvaluations().filter((e) => e.sessionId === sessionId);
+}
+
+export function getLatestEvaluationForSession(
+  sessionId: string,
+): EvaluationReport | undefined {
+  return getEvaluationsForSession(sessionId)[0];
+}
+
+export function getEvaluationsForCharacter(
+  characterId: string,
+): EvaluationReport[] {
+  return getEvaluations().filter((e) => e.characterId === characterId);
+}
+
+export function saveEvaluation(report: EvaluationReport): EvaluationReport {
+  const all = readJSON<EvaluationReport[]>(KEYS.evaluations, []);
+  const idx = all.findIndex((r) => r.id === report.id);
+  if (idx >= 0) {
+    all[idx] = report;
+  } else {
+    all.unshift(report);
+  }
+  writeJSON(KEYS.evaluations, all);
+  return report;
+}
+
+export function deleteEvaluation(id: string): void {
+  const all = readJSON<EvaluationReport[]>(KEYS.evaluations, []).filter(
+    (r) => r.id !== id,
+  );
+  writeJSON(KEYS.evaluations, all);
+}
+
 // ---------- Bulk ----------
 
 export function clearAllData(): void {
@@ -212,6 +295,10 @@ export function ensureSeeded(): void {
   const existingPresets = getPromptPresets();
   if (existingPresets.length === 0) {
     writeJSON(KEYS.prompts, buildSeedPromptPresets());
+  }
+  const existingPersonas = getPersonas();
+  if (existingPersonas.length === 0) {
+    writeJSON(KEYS.personas, buildSeedPersonas());
   }
   saveConfig({ hasSeeded: true });
 }

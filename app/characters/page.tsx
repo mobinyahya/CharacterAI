@@ -73,6 +73,7 @@ export default function CharactersPage() {
               href={`/characters/${c.id}/edit`}
               editHref={`/characters/${c.id}/edit`}
               startHref={`/chat/new?character=${c.id}`}
+              evaluateHref={`/evaluate?characterId=${c.id}`}
               onDelete={() => handleDelete(c.id, c.name)}
             />
           ))}

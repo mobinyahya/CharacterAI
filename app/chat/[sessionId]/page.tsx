@@ -3,7 +3,11 @@
 import * as React from "react";
 import { notFound, useParams } from "next/navigation";
 import { ChatInterface } from "@/components/ChatInterface";
-import { getCharacter, getPersona, getSession } from "@/lib/storage";
+import {
+  getCharacter,
+  getSession,
+  resolveSessionPersona,
+} from "@/lib/storage";
 import type { CharacterCard, Session, UserPersona } from "@/types";
 
 export default function ChatPage() {
@@ -33,7 +37,7 @@ export default function ChatPage() {
       setState({ status: "missing" });
       return;
     }
-    const persona = session.personaId ? getPersona(session.personaId) : undefined;
+    const persona = resolveSessionPersona(session);
     setState({ status: "ready", session, character, persona });
   }, [sessionId]);
 

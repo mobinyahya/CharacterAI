@@ -5,6 +5,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
+  BarChart3,
+  Gavel,
   LayoutDashboard,
   Users,
   UserCog,
@@ -19,6 +21,8 @@ const NAV_ITEMS = [
   { href: "/characters", label: "Characters", icon: Users },
   { href: "/personas", label: "Personas", icon: UserCog },
   { href: "/prompts", label: "Prompts", icon: FileText },
+  { href: "/evaluate", label: "Evaluate", icon: Gavel },
+  { href: "/evaluations", label: "Evaluations", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -56,7 +60,8 @@ export function Sidebar() {
           const active =
             item.href === "/"
               ? pathname === "/"
-              : pathname.startsWith(item.href);
+              : pathname === item.href ||
+                pathname.startsWith(item.href + "/");
           const Icon = item.icon;
           return (
             <Link

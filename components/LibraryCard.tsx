@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
-import { MessageCircle, Pencil, Trash2 } from "lucide-react";
+import { Gavel, MessageCircle, Pencil, Trash2 } from "lucide-react";
 import { truncate } from "@/lib/utils";
 
 interface LibraryCardProps {
@@ -19,6 +19,8 @@ interface LibraryCardProps {
   href: string;
   editHref: string;
   startHref?: string;
+  /** Optional second action — opens the eval runner for this entry. */
+  evaluateHref?: string;
   onDelete: () => void;
 }
 
@@ -30,6 +32,7 @@ export function LibraryCard({
   href,
   editHref,
   startHref,
+  evaluateHref,
   onDelete,
 }: LibraryCardProps) {
   const [confirmOpen, setConfirmOpen] = React.useState(false);
@@ -60,16 +63,33 @@ export function LibraryCard({
         )}
 
         <div className="mt-auto flex items-center justify-between gap-2">
-          {startHref ? (
-            <Link href={startHref} className="flex-1">
-              <Button size="sm" className="w-full">
-                <MessageCircle className="h-3.5 w-3.5" />
-                Start Chat
-              </Button>
-            </Link>
-          ) : (
-            <span className="flex-1" />
-          )}
+          <div className="flex flex-1 items-center gap-1.5">
+            {startHref && (
+              <Link href={startHref} className="flex-1">
+                <Button size="sm" className="w-full">
+                  <MessageCircle className="h-3.5 w-3.5" />
+                  Chat
+                </Button>
+              </Link>
+            )}
+            {evaluateHref && (
+              <Link
+                href={evaluateHref}
+                className={startHref ? undefined : "flex-1"}
+              >
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className={startHref ? "" : "w-full"}
+                  title="Run an automated evaluation against this character"
+                >
+                  <Gavel className="h-3.5 w-3.5" />
+                  Evaluate
+                </Button>
+              </Link>
+            )}
+            {!startHref && !evaluateHref && <span className="flex-1" />}
+          </div>
           <div className="flex items-center gap-1">
             <Link href={editHref}>
               <Button

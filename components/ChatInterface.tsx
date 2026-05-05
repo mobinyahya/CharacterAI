@@ -12,6 +12,7 @@ import { ModelBadge, ModelSelector } from "@/components/ModelSelector";
 import { PromptPresetSelector } from "@/components/PromptPresetSelector";
 import { Dialog } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
+import { EvaluationPanel, EvaluationBadge } from "@/components/EvaluationPanel";
 import {
   buildCharacterRequestMessages,
   fillCharacterTokens,
@@ -21,6 +22,7 @@ import { OpenRouterError, streamCompletion } from "@/lib/openrouter";
 import {
   appendMessage,
   getConfig,
+  getLatestEvaluationForSession,
   getPromptPresets,
   saveConfig,
   saveSession,
@@ -29,6 +31,7 @@ import {
 import { downloadText, formatTime, uid } from "@/lib/utils";
 import type {
   CharacterCard,
+  EvaluationReport,
   Message,
   PromptPreset,
   Session,
@@ -39,6 +42,7 @@ import {
   ArrowLeft,
   Bot,
   Download,
+  Gavel,
   Loader2,
   PlayCircle,
   RefreshCw,
@@ -76,6 +80,10 @@ export function ChatInterface({
   >(null);
   const [streamingText, setStreamingText] = React.useState("");
   const [showSettings, setShowSettings] = React.useState(false);
+  const [showEval, setShowEval] = React.useState(false);
+  const [latestEval, setLatestEval] = React.useState<EvaluationReport | undefined>(
+    undefined,
+  );
   const [confirmReset, setConfirmReset] = React.useState(false);
   const [autopilotTurns, setAutopilotTurns] = React.useState(5);
   const abortRef = React.useRef<AbortController | null>(null);
@@ -84,9 +92,14 @@ export function ChatInterface({
   const isAutopilot = !!persona;
   const apiKey = React.useMemo(() => getConfig().openRouterApiKey, []);
 
+  const refreshLatestEval = React.useCallback(() => {
+    setLatestEval(getLatestEvaluationForSession(session.id));
+  }, [session.id]);
+
   React.useEffect(() => {
     setPresets(getPromptPresets());
-  }, []);
+    refreshLatestEval();
+  }, [refreshLatestEval]);
 
   const preset = presets.find((p) => p.id === promptConfig?.presetId);
 
@@ -379,6 +392,7 @@ export function ChatInterface({
                   Narrator · {preset.title}
                 </Badge>
               )}
+              <EvaluationBadge report={latestEval} />
             </div>
             <div className="truncate text-xs text-muted-foreground">
               {session.messages.length} message
@@ -388,6 +402,16 @@ export function ChatInterface({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowEval(true)}
+            disabled={session.messages.length < 2}
+            title="Run LLM-judge evaluation on this transcript"
+          >
+            <Gavel className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Evaluate</span>
+          </Button>
           <Button
             variant="ghost"
             size="icon"
@@ -555,6 +579,15 @@ export function ChatInterface({
           </Button>
         </div>
       </Dialog>
+
+      <EvaluationPanel
+        open={showEval}
+        onClose={() => setShowEval(false)}
+        session={session}
+        character={character}
+        persona={persona}
+        onChange={refreshLatestEval}
+      />
     </div>
   );
 }

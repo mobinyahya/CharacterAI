@@ -13,6 +13,7 @@ import { useToast } from "@/components/ui/toast";
 import {
   deleteSession,
   getCharacters,
+  getEvaluations,
   getPersonas,
   getPromptPresets,
   getSessions,
@@ -20,12 +21,15 @@ import {
 import { formatRelativeTime, truncate } from "@/lib/utils";
 import type {
   CharacterCard,
+  EvaluationReport,
   PromptPreset,
   Session,
   UserPersona,
 } from "@/types";
 import {
+  BarChart3,
   FileText,
+  Gavel,
   MessageSquare,
   MessageSquarePlus,
   Plus,
@@ -41,6 +45,7 @@ export default function DashboardPage() {
   const [characters, setCharacters] = React.useState<CharacterCard[]>([]);
   const [personas, setPersonas] = React.useState<UserPersona[]>([]);
   const [presets, setPresets] = React.useState<PromptPreset[]>([]);
+  const [evaluations, setEvaluations] = React.useState<EvaluationReport[]>([]);
   const [loaded, setLoaded] = React.useState(false);
 
   const reload = React.useCallback(() => {
@@ -48,6 +53,7 @@ export default function DashboardPage() {
     setCharacters(getCharacters());
     setPersonas(getPersonas());
     setPresets(getPromptPresets());
+    setEvaluations(getEvaluations());
     setLoaded(true);
   }, []);
 
@@ -76,7 +82,7 @@ export default function DashboardPage() {
         }
       />
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         <StatCard
           icon={<Users className="h-4 w-4 text-primary" />}
           label="Characters"
@@ -104,6 +110,13 @@ export default function DashboardPage() {
           value={sessions.length}
           href="/chat/new"
           ctaLabel="Start new chat"
+        />
+        <StatCard
+          icon={<BarChart3 className="h-4 w-4 text-primary" />}
+          label="Evaluations"
+          value={evaluations.length}
+          href="/evaluations"
+          ctaLabel="Open dashboard"
         />
       </div>
 
@@ -139,9 +152,11 @@ export default function DashboardPage() {
             <div className="flex flex-col gap-3">
               {sessions.slice(0, 12).map((s) => {
                 const c = characters.find((x) => x.id === s.characterId);
-                const p = s.personaId
-                  ? personas.find((x) => x.id === s.personaId)
-                  : undefined;
+                const personaName =
+                  s.personaSnapshot?.name ??
+                  (s.personaId
+                    ? personas.find((x) => x.id === s.personaId)?.name
+                    : undefined);
                 if (!c) return null;
                 const lastMsg = s.messages[s.messages.length - 1];
                 return (
@@ -156,9 +171,9 @@ export default function DashboardPage() {
                         <span className="truncate text-sm font-medium">
                           {c.name}
                         </span>
-                        {p && (
+                        {personaName && (
                           <Badge variant="default" className="text-[10px]">
-                            auto · {p.name}
+                            auto · {personaName}
                           </Badge>
                         )}
                         <ModelBadge modelId={s.model} />
@@ -224,6 +239,13 @@ export default function DashboardPage() {
               >
                 <Sparkles className="h-4 w-4" />
                 Run an auto-pilot session
+              </Link>
+              <Link
+                href="/evaluate"
+                className="flex items-center gap-3 rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <Gavel className="h-4 w-4" />
+                Evaluate a character
               </Link>
             </div>
           </Card>

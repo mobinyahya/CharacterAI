@@ -81,7 +81,7 @@ export function LibraryCard({
                   size="sm"
                   variant="outline"
                   className={startHref ? "" : "w-full"}
-                  title="Run an automated evaluation against this character"
+                  title="Run an evaluation against this character — static (card audit) or dynamic (chat + judge)"
                 >
                   <Gavel className="h-3.5 w-3.5" />
                   Evaluate

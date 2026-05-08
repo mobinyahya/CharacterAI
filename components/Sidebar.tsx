@@ -21,7 +21,7 @@ const NAV_ITEMS = [
   { href: "/characters", label: "Characters", icon: Users },
   { href: "/personas", label: "Personas", icon: UserCog },
   { href: "/prompts", label: "Prompts", icon: FileText },
-  { href: "/evaluate", label: "Evaluate", icon: Gavel },
+  { href: "/evaluate", label: "Run Evaluation", icon: Gavel },
   { href: "/evaluations", label: "Evaluations", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

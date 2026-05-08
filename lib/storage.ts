@@ -5,6 +5,7 @@ import type {
   Message,
   PromptPreset,
   Session,
+  StaticEvaluationReport,
   UserPersona,
 } from "@/types";
 import { DEFAULT_MODEL } from "@/types";
@@ -19,6 +20,7 @@ const KEYS = {
   config: "charai.config.v1",
   prompts: "charai.prompts.v1",
   evaluations: "charai.evaluations.v1",
+  staticEvaluations: "charai.staticEvaluations.v1",
 } as const;
 
 const isBrowser = () => typeof window !== "undefined";
@@ -91,6 +93,11 @@ export function deleteCharacter(id: string): void {
     (e) => e.characterId !== id,
   );
   writeJSON(KEYS.evaluations, remainingEvals);
+  const remainingStatic = readJSON<StaticEvaluationReport[]>(
+    KEYS.staticEvaluations,
+    [],
+  ).filter((e) => e.characterId !== id);
+  writeJSON(KEYS.staticEvaluations, remainingStatic);
 }
 
 // ---------- Personas ----------
@@ -273,6 +280,56 @@ export function deleteEvaluation(id: string): void {
     (r) => r.id !== id,
   );
   writeJSON(KEYS.evaluations, all);
+}
+
+// ---------- Static Evaluations ----------
+// Card-only audits (no chat session). Keyed by report id since they have no
+// underlying session. Cascade-deleted when the character is removed.
+
+export function getStaticEvaluations(): StaticEvaluationReport[] {
+  return readJSON<StaticEvaluationReport[]>(KEYS.staticEvaluations, []).sort(
+    (a, b) => b.createdAt - a.createdAt,
+  );
+}
+
+export function getStaticEvaluation(
+  id: string,
+): StaticEvaluationReport | undefined {
+  return getStaticEvaluations().find((r) => r.id === id);
+}
+
+export function getStaticEvaluationsForCharacter(
+  characterId: string,
+): StaticEvaluationReport[] {
+  return getStaticEvaluations().filter((r) => r.characterId === characterId);
+}
+
+export function getLatestStaticEvaluationForCharacter(
+  characterId: string,
+): StaticEvaluationReport | undefined {
+  return getStaticEvaluationsForCharacter(characterId)[0];
+}
+
+export function saveStaticEvaluation(
+  report: StaticEvaluationReport,
+): StaticEvaluationReport {
+  const all = readJSON<StaticEvaluationReport[]>(KEYS.staticEvaluations, []);
+  const idx = all.findIndex((r) => r.id === report.id);
+  if (idx >= 0) {
+    all[idx] = report;
+  } else {
+    all.unshift(report);
+  }
+  writeJSON(KEYS.staticEvaluations, all);
+  return report;
+}
+
+export function deleteStaticEvaluation(id: string): void {
+  const all = readJSON<StaticEvaluationReport[]>(
+    KEYS.staticEvaluations,
+    [],
+  ).filter((r) => r.id !== id);
+  writeJSON(KEYS.staticEvaluations, all);
 }
 
 // ---------- Bulk ----------

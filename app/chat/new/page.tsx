@@ -9,7 +9,7 @@ export default function NewChatPage() {
     <div className="container py-8">
       <PageHeader
         title="Start a chat"
-        description="Pick a character and either type with them yourself, or set a user persona to run an auto-pilot evaluation."
+        description="Pick a character and either type with them yourself, or set a user persona to run an auto-pilot Dynamic Eval."
       />
       <Suspense fallback={<div className="text-sm text-muted-foreground">Loading…</div>}>
         <SessionSetup />

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { Suspense } from "react";
 import { notFound, useParams } from "next/navigation";
 import { ChatInterface } from "@/components/ChatInterface";
 import {
@@ -53,10 +54,20 @@ export default function ChatPage() {
   }
 
   return (
-    <ChatInterface
-      initialSession={state.session}
-      character={state.character}
-      persona={state.persona}
-    />
+    // ChatInterface reads ?continue=manual via useSearchParams; wrap in
+    // Suspense per Next.js 14 client-component-with-search-params guidance.
+    <Suspense
+      fallback={
+        <div className="container py-10 text-sm text-muted-foreground">
+          Loading session…
+        </div>
+      }
+    >
+      <ChatInterface
+        initialSession={state.session}
+        character={state.character}
+        persona={state.persona}
+      />
+    </Suspense>
   );
 }

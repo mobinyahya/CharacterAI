@@ -17,6 +17,7 @@ import {
   getPersonas,
   getPromptPresets,
   getSessions,
+  getStaticEvaluations,
 } from "@/lib/storage";
 import { formatRelativeTime, truncate } from "@/lib/utils";
 import type {
@@ -24,6 +25,7 @@ import type {
   EvaluationReport,
   PromptPreset,
   Session,
+  StaticEvaluationReport,
   UserPersona,
 } from "@/types";
 import {
@@ -33,6 +35,7 @@ import {
   MessageSquare,
   MessageSquarePlus,
   Plus,
+  ScrollText,
   Sparkles,
   Trash2,
   UserCog,
@@ -46,6 +49,9 @@ export default function DashboardPage() {
   const [personas, setPersonas] = React.useState<UserPersona[]>([]);
   const [presets, setPresets] = React.useState<PromptPreset[]>([]);
   const [evaluations, setEvaluations] = React.useState<EvaluationReport[]>([]);
+  const [staticEvals, setStaticEvals] = React.useState<StaticEvaluationReport[]>(
+    [],
+  );
   const [loaded, setLoaded] = React.useState(false);
 
   const reload = React.useCallback(() => {
@@ -54,6 +60,7 @@ export default function DashboardPage() {
     setPersonas(getPersonas());
     setPresets(getPromptPresets());
     setEvaluations(getEvaluations());
+    setStaticEvals(getStaticEvaluations());
     setLoaded(true);
   }, []);
 
@@ -71,7 +78,7 @@ export default function DashboardPage() {
     <div className="container py-8">
       <PageHeader
         title="Workshop"
-        description="Build characters with psychological depth, run them through evaluation personas, and ship the ones that hold."
+        description="Build characters with psychological depth, audit cards statically, run them through dynamic-eval personas, and ship the ones that hold."
         actions={
           <Link href="/chat/new">
             <Button>
@@ -82,7 +89,7 @@ export default function DashboardPage() {
         }
       />
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
         <StatCard
           icon={<Users className="h-4 w-4 text-primary" />}
           label="Characters"
@@ -112,8 +119,15 @@ export default function DashboardPage() {
           ctaLabel="Start new chat"
         />
         <StatCard
+          icon={<ScrollText className="h-4 w-4 text-primary" />}
+          label="Static audits"
+          value={staticEvals.length}
+          href="/evaluations?type=static"
+          ctaLabel="Open audits"
+        />
+        <StatCard
           icon={<BarChart3 className="h-4 w-4 text-primary" />}
-          label="Evaluations"
+          label="Dynamic Evals"
           value={evaluations.length}
           href="/evaluations"
           ctaLabel="Open dashboard"
@@ -224,7 +238,7 @@ export default function DashboardPage() {
                 className="flex items-center gap-3 rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
                 <Plus className="h-4 w-4" />
-                Create an evaluation persona
+                Create a dynamic-eval persona
               </Link>
               <Link
                 href="/prompts/new"
@@ -241,11 +255,18 @@ export default function DashboardPage() {
                 Run an auto-pilot session
               </Link>
               <Link
+                href="/evaluate?type=static"
+                className="flex items-center gap-3 rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <ScrollText className="h-4 w-4" />
+                Audit a card (static)
+              </Link>
+              <Link
                 href="/evaluate"
                 className="flex items-center gap-3 rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
                 <Gavel className="h-4 w-4" />
-                Evaluate a character
+                Run a Dynamic Eval
               </Link>
             </div>
           </Card>

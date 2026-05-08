@@ -375,7 +375,7 @@ function Header({
       <div>
         <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
           <FileText className="h-3.5 w-3.5" />
-          Evaluation report
+          Dynamic Eval report
           <span>·</span>
           {formatRelativeTime(report.createdAt)}
         </div>

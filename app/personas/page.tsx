@@ -35,7 +35,7 @@ export default function PersonasPage() {
     <div className="container py-8">
       <PageHeader
         title="User Personas"
-        description="Personas drive the user side of auto-pilot evaluation sessions. Different personas surface different character failure modes."
+        description="Personas drive the user side of Dynamic Eval auto-pilot sessions. Different personas surface different character failure modes."
         actions={
           <Link href="/personas/new">
             <Button>
@@ -50,7 +50,7 @@ export default function PersonasPage() {
         <EmptyState
           icon={<UserCog className="h-5 w-5" />}
           title="No personas yet"
-          description="Create personas (sustained-presence, genre-deflater, antagonist, bluff-caller, etc.) to drive auto-pilot evaluations."
+          description="Create personas (sustained-presence, genre-deflater, antagonist, bluff-caller, etc.) to drive Dynamic Eval auto-pilot sessions."
           action={
             <Link href="/personas/new">
               <Button>

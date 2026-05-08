@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -65,6 +65,7 @@ export function ChatInterface({
   persona,
 }: ChatInterfaceProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { toast } = useToast();
 
   const [session, setSession] = React.useState<Session>(initialSession);
@@ -89,7 +90,18 @@ export function ChatInterface({
   const abortRef = React.useRef<AbortController | null>(null);
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
 
-  const isAutopilot = !!persona;
+  // ---- Composer mode --------------------------------------------------------
+  // Sessions with a persona attached (eval-runner or persona-library auto-pilot
+  // runs) can be continued manually — the character LLM doesn't care who's
+  // typing on the user side. Default to auto-pilot for those sessions to
+  // preserve existing flows, but honour `?continue=manual` in the URL so the
+  // dashboard can drop the user straight into manual mode.
+  const initialMode: "auto" | "manual" = React.useMemo(() => {
+    if (!persona) return "manual";
+    return searchParams?.get("continue") === "manual" ? "manual" : "auto";
+  }, [persona, searchParams]);
+  const [mode, setMode] = React.useState<"auto" | "manual">(initialMode);
+
   const apiKey = React.useMemo(() => getConfig().openRouterApiKey, []);
 
   const refreshLatestEval = React.useCallback(() => {
@@ -217,6 +229,7 @@ export function ChatInterface({
       role: "user",
       content: input.trim(),
       timestamp: Date.now(),
+      humanAuthored: true,
     };
     setInput("");
     const updatedSession = appendMessage(session.id, userMsg);
@@ -378,14 +391,14 @@ export function ChatInterface({
             className="shrink-0"
           />
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h2 className="truncate text-sm font-semibold">
                 {character.name}
               </h2>
               <ModelBadge modelId={model} />
-              {isAutopilot && (
+              {persona && (
                 <Badge variant="default" className="text-[10px]">
-                  Auto-pilot · {persona?.name}
+                  Persona · {persona.name}
                 </Badge>
               )}
               {preset && (
@@ -403,15 +416,22 @@ export function ChatInterface({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          {persona && (
+            <ModeToggle
+              mode={mode}
+              onChange={setMode}
+              disabled={busy}
+            />
+          )}
           <Button
             variant="outline"
             size="sm"
             onClick={() => setShowEval(true)}
             disabled={session.messages.length < 2}
-            title="Run LLM-judge evaluation on this transcript"
+            title="Run Dynamic Eval on this transcript"
           >
             <Gavel className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Evaluate</span>
+            <span className="hidden sm:inline">Dynamic Eval</span>
           </Button>
           <Button
             variant="ghost"
@@ -454,6 +474,12 @@ export function ChatInterface({
                 role: streamingRole,
                 content: streamingText || "…",
                 timestamp: Date.now(),
+                // While streaming we know who's producing it: the persona-LLM
+                // (auto mode) or the human is typing in manual mode (user
+                // bubble already covered by humanAuthored on the persisted
+                // message). The streaming bubble is short-lived so this
+                // fallback never persists.
+                humanAuthored: mode === "manual" && streamingRole === "user",
               }}
               character={character}
               persona={persona}
@@ -465,7 +491,7 @@ export function ChatInterface({
       {/* Composer */}
       <div className="border-t border-border bg-card/40 px-4 py-4">
         <div className="mx-auto max-w-3xl">
-          {isAutopilot ? (
+          {persona && mode === "auto" ? (
             <AutopilotComposer
               busy={busy}
               turns={autopilotTurns}
@@ -484,6 +510,7 @@ export function ChatInterface({
               hasMessages={session.messages.some(
                 (m) => m.role === "assistant",
               )}
+              continuingFromAuto={!!persona}
             />
           )}
         </div>
@@ -605,8 +632,20 @@ function MessageBubble({
   streaming?: boolean;
 }) {
   const isUser = message.role === "user";
-  const name = isUser ? persona?.name ?? "You" : character.name;
-  const avatar = isUser ? persona?.avatarUrl : character.avatarUrl;
+  // Persona-driven messages keep the persona's name + avatar (auto-pilot
+  // history). Human-typed messages show "You" — the human took over the
+  // user side. Pure manual sessions (no persona) always show "You".
+  const isHuman = isUser && (message.humanAuthored === true || !persona);
+  const name = !isUser
+    ? character.name
+    : isHuman
+      ? "You"
+      : persona?.name ?? "You";
+  const avatar = !isUser
+    ? character.avatarUrl
+    : isHuman
+      ? undefined
+      : persona?.avatarUrl;
 
   return (
     <div
@@ -656,6 +695,7 @@ function ManualComposer({
   onStop,
   onRegenerate,
   hasMessages,
+  continuingFromAuto,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -664,6 +704,8 @@ function ManualComposer({
   onStop: () => void;
   onRegenerate: () => void;
   hasMessages: boolean;
+  /** True when this manual composer is showing on top of an auto-pilot session. */
+  continuingFromAuto?: boolean;
 }) {
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -695,7 +737,11 @@ function ManualComposer({
         )}
       </div>
       <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-        <span>Manual mode — you type, the character replies.</span>
+        <span>
+          {continuingFromAuto
+            ? "Manual mode — you've taken over the user side. The character LLM responds normally."
+            : "Manual mode — you type, the character replies."}
+        </span>
         {hasMessages && (
           <button
             type="button"
@@ -708,6 +754,60 @@ function ManualComposer({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Two-segment toggle for sessions with a persona attached: switch between
+ * Auto-pilot (LLM ↔ LLM) and Manual (you take over the user side). Disabled
+ * while a turn is generating to avoid mid-stream surprises.
+ */
+function ModeToggle({
+  mode,
+  onChange,
+  disabled,
+}: {
+  mode: "auto" | "manual";
+  onChange: (next: "auto" | "manual") => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="Composer mode"
+      className="mr-1 flex items-center rounded-md border border-border bg-card/40 p-0.5 text-[11px]"
+    >
+      <button
+        type="button"
+        role="tab"
+        aria-selected={mode === "auto"}
+        onClick={() => onChange("auto")}
+        disabled={disabled}
+        title="Run the persona-LLM as the user side"
+        className={`rounded px-2 py-1 transition-colors disabled:opacity-50 ${
+          mode === "auto"
+            ? "bg-primary/15 text-foreground"
+            : "text-muted-foreground hover:text-foreground"
+        }`}
+      >
+        Auto-pilot
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={mode === "manual"}
+        onClick={() => onChange("manual")}
+        disabled={disabled}
+        title="You type the user side; the character LLM responds normally"
+        className={`rounded px-2 py-1 transition-colors disabled:opacity-50 ${
+          mode === "manual"
+            ? "bg-primary/15 text-foreground"
+            : "text-muted-foreground hover:text-foreground"
+        }`}
+      >
+        Manual
+      </button>
     </div>
   );
 }

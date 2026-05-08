@@ -94,7 +94,7 @@ export function EvaluationPanel({
     }
     if (tooShort) {
       toast({
-        title: "Need at least one user turn to evaluate.",
+        title: "Need at least one user turn to run a Dynamic Eval.",
         variant: "error",
       });
       return;
@@ -118,7 +118,7 @@ export function EvaluationPanel({
       refresh();
       onChange?.();
       toast({
-        title: "Evaluation complete",
+        title: "Dynamic Eval complete",
         description: `F ${
           report.composite.faithfulness?.toFixed(2) ?? "—"
         } · Q ${report.composite.quality?.toFixed(2) ?? "—"} · T ${
@@ -128,7 +128,7 @@ export function EvaluationPanel({
       });
     } catch (err) {
       if ((err as Error).name === "AbortError") {
-        toast({ title: "Evaluation cancelled", variant: "info" });
+        toast({ title: "Dynamic Eval cancelled", variant: "info" });
       } else {
         const msg =
           err instanceof OpenRouterError
@@ -137,7 +137,7 @@ export function EvaluationPanel({
               ? err.message
               : "Unknown error";
         toast({
-          title: "Evaluation failed",
+          title: "Dynamic Eval failed",
           description: msg,
           variant: "error",
         });
@@ -157,7 +157,7 @@ export function EvaluationPanel({
     deleteEvaluation(id);
     refresh();
     onChange?.();
-    toast({ title: "Evaluation deleted", variant: "success" });
+    toast({ title: "Dynamic Eval deleted", variant: "success" });
   }
 
   return (
@@ -165,7 +165,7 @@ export function EvaluationPanel({
       open={open}
       onClose={onClose}
       className="max-w-5xl"
-      title="Turn-based evaluation"
+      title="Dynamic Evaluation"
       description="Score this transcript on Card Faithfulness, Session Quality, Emotional Texture, and Narrative Craft. Detects A6 (resolution avoidance) and B6 (internal-consistency) failure flags."
     >
       <div className="grid max-h-[80vh] gap-5 overflow-hidden md:grid-cols-[260px_1fr]">
@@ -291,7 +291,7 @@ function RunPanel({
           className="w-full"
         >
           <Gavel className="h-3.5 w-3.5" />
-          {existingCount > 0 ? "Re-evaluate" : "Run evaluation"}
+          {existingCount > 0 ? "Re-run Dynamic Eval" : "Run Dynamic Eval"}
         </Button>
       )}
 
@@ -302,7 +302,7 @@ function RunPanel({
         </div>
         {tooShort && (
           <div className="text-amber-300">
-            Need at least one user turn to evaluate.
+            Need at least one user turn to run a Dynamic Eval.
           </div>
         )}
         {!hasKey && (
@@ -432,7 +432,7 @@ function EmptyState({
         <Gavel className="h-4 w-4" />
       </div>
       <div>
-        <h4 className="text-sm font-semibold">No evaluations yet for this session</h4>
+        <h4 className="text-sm font-semibold">No Dynamic Evaluations yet for this session</h4>
         <p className="mt-1 max-w-sm text-xs text-muted-foreground">
           Run the judge to score this transcript across Cluster A (faithfulness),
           Cluster B (quality), Cluster C+D (texture), plus A6 / B6 binary flags.
@@ -442,7 +442,7 @@ function EmptyState({
       {!tooShort && hasKey && (
         <Button size="sm" onClick={onRun}>
           <PlayCircle className="h-3.5 w-3.5" />
-          Run first evaluation
+          Run first Dynamic Eval
           <ArrowRight className="h-3.5 w-3.5" />
         </Button>
       )}

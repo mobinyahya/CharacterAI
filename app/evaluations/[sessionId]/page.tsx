@@ -21,7 +21,7 @@ import type {
   UserPersona,
 } from "@/types";
 import { formatRelativeTime } from "@/lib/utils";
-import { ArrowLeft, Gavel, MessageSquare } from "lucide-react";
+import { ArrowLeft, Gavel, MessageSquare, ScrollText } from "lucide-react";
 
 interface State {
   status: "loading" | "missing" | "ready";
@@ -79,18 +79,18 @@ export default function EvaluationDetailPage() {
       <div className="container py-8">
         <BackLink />
         <PageHeader
-          title="No evaluation yet"
-          description={`There's no judge report for "${character?.name ?? "this session"}" yet. Open the chat and click Evaluate to score the transcript.`}
+          title="No Dynamic Eval yet"
+          description={`There's no judge report for "${character?.name ?? "this session"}" yet. Open the chat and click Dynamic Eval to score the transcript.`}
         />
         <EmptyState
           icon={<Gavel className="h-5 w-5" />}
-          title="Run your first evaluation"
+          title="Run your first Dynamic Eval"
           description="The judge reads the transcript, applies the Cluster A + B rubric with anchor descriptions, and returns dimension-level scores with verbatim citations."
           action={
-            <Link href={`/chat/${sessionId}`}>
+            <Link href={`/chat/${sessionId}?continue=manual`}>
               <Button>
                 <MessageSquare className="h-4 w-4" />
-                Open chat
+                Continue chat
               </Button>
             </Link>
           }
@@ -174,18 +174,34 @@ export default function EvaluationDetailPage() {
               </div>
             </div>
             <div className="mt-4 flex flex-col gap-2">
-              <Link href={`/chat/${sessionId}`}>
+              <Link href={`/chat/${sessionId}?continue=manual`}>
                 <Button variant="outline" size="sm" className="w-full">
                   <MessageSquare className="h-3.5 w-3.5" />
-                  Open chat
+                  Continue chat
                 </Button>
               </Link>
               {character && (
-                <Link href={`/characters/${character.id}/edit`}>
-                  <Button variant="ghost" size="sm" className="w-full">
-                    Edit character
-                  </Button>
-                </Link>
+                <>
+                  <Link href={`/evaluate?characterId=${character.id}`}>
+                    <Button variant="ghost" size="sm" className="w-full">
+                      <Gavel className="h-3.5 w-3.5" />
+                      Run Dynamic Eval
+                    </Button>
+                  </Link>
+                  <Link
+                    href={`/evaluate?type=static&characterId=${character.id}`}
+                  >
+                    <Button variant="ghost" size="sm" className="w-full">
+                      <ScrollText className="h-3.5 w-3.5" />
+                      Audit card (static)
+                    </Button>
+                  </Link>
+                  <Link href={`/characters/${character.id}/edit`}>
+                    <Button variant="ghost" size="sm" className="w-full">
+                      Edit character
+                    </Button>
+                  </Link>
+                </>
               )}
             </div>
           </Card>
@@ -202,7 +218,7 @@ function BackLink() {
       className="mb-4 inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
     >
       <ArrowLeft className="h-3.5 w-3.5" />
-      All evaluations
+      All Dynamic Evaluations
     </Link>
   );
 }

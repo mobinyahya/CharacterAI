@@ -432,7 +432,7 @@ export function EvaluationRunner() {
       });
 
       toast({
-        title: "Evaluation complete",
+        title: "Dynamic Eval complete",
         description: `F ${
           report.composite.faithfulness?.toFixed(2) ?? "—"
         } · Q ${report.composite.quality?.toFixed(2) ?? "—"} · T ${
@@ -493,7 +493,7 @@ export function EvaluationRunner() {
       <DonePhase
         phase={phase}
         onStartAnother={handleStartAnother}
-        onOpenChat={() => router.push(`/chat/${phase.session.id}`)}
+        onOpenChat={() => router.push(`/chat/${phase.session.id}?continue=manual`)}
       />
     );
   }
@@ -767,7 +767,7 @@ function ConfigurePhase(props: {
                 className="gap-2"
               >
                 <PlayCircle className="h-4 w-4" />
-                Run evaluation
+                Run Dynamic Eval
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </div>
@@ -1510,7 +1510,7 @@ export function EvaluateBackLink() {
       className="mb-3 inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
     >
       <ArrowLeft className="h-3.5 w-3.5" />
-      Back to all evaluations
+      Back to all Dynamic Evaluations
     </Link>
   );
 }

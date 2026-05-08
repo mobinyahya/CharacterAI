@@ -5,6 +5,16 @@ export interface Message {
   role: Role;
   content: string;
   timestamp: number;
+  /**
+   * True when the human user typed this message themselves (manual composer),
+   * false / undefined when produced by the persona LLM during auto-pilot. Lets
+   * the UI label persona-driven and human-typed user messages distinctly when
+   * a session has been continued manually after auto-pilot.
+   *
+   * Optional in storage so legacy messages continue to load — they're
+   * implicitly persona-authored when a persona is attached, "You" otherwise.
+   */
+  humanAuthored?: boolean;
 }
 
 export interface CharacterCard {
@@ -328,6 +338,88 @@ export interface EvaluationReport {
     texture?: number | null;
   };
   /** Raw judge text response (kept for transparency / debugging). */
+  rawJudgeResponse: string;
+  createdAt: number;
+}
+
+// ---------- Static Evaluation (card-only audit, no chat) ----------
+
+/**
+ * The six 0–5 scored dimensions of the static rubric (`Static Eval Rubrics.md`).
+ * `selfGap` is N/A for Closed-shape cards. The vector is the natural reading
+ * order from the spec: structure, states, voice, self-gap, worldview, individuation.
+ */
+export type StaticDimId =
+  | "structure"
+  | "states"
+  | "voice"
+  | "selfGap"
+  | "worldview"
+  | "individuation";
+
+/**
+ * Severity for static-eval flags. `error` = the card violates a hard rule
+ * (e.g. an unresolved contradiction); `warning` = concrete weakness the judge
+ * named (floating trait, missing trigger, undocumented limit provenance);
+ * `info` = empty-field diagnostic — note, don't penalize.
+ */
+export type StaticFlagSeverity = "error" | "warning" | "info";
+
+export interface StaticFlag {
+  label: string;
+  severity: StaticFlagSeverity;
+  /** Optional pointer to the section of the card the flag is anchored to. */
+  section?: string;
+}
+
+export interface StaticDimensionScore {
+  /** 0..5, or null when N/A (e.g. self-gap on Closed cards). */
+  score: number | null;
+  /** Judge's 1–3 sentence justification. */
+  notes: string;
+  /**
+   * Verbatim fragments lifted from the card text supporting the score. Quotes
+   * — never paraphrases — exactly like the dynamic rubric's evidence rule.
+   */
+  evidence: string[];
+  /**
+   * Sub-axis breakdown the judge surfaces for this dim. Used heavily by Voice
+   * (voluntary / involuntary / generative counts) and Individuation (load-bearing
+   * vs. decorative), but supported uniformly so the UI can render any dim.
+   */
+  subAxes?: { label: string; value: string | number }[];
+  /** Required for any score below 4. Empty string when score >= 4 or null. */
+  suggestion?: string;
+}
+
+/**
+ * Result of running the gating logic against a parsed report. Computed
+ * client-side from `cardShape` + scores so it stays consistent.
+ */
+export interface StaticGatingResult {
+  /** True when every gate appropriate to the card shape passed. */
+  passes: boolean;
+  /** Human-readable failure descriptions (one per failing gate). */
+  failures: string[];
+}
+
+export interface StaticEvaluationReport {
+  id: string;
+  characterId: string;
+  judgeModel: string;
+  cardShape: CardShape;
+  /** Spine extraction — judge's one-sentence read of the card's load-bearing structure. */
+  spine: string;
+  scores: Record<StaticDimId, StaticDimensionScore>;
+  flags: StaticFlag[];
+  /**
+   * 1–2 highest-leverage refinements per the spec ("Top leverage suggestions").
+   * Stored as a flat list for parity with the dynamic report.
+   */
+  topSuggestions: string[];
+  /** Mean of non-null scores. Null only when nothing scored (judge failure). */
+  composite: number | null;
+  /** Raw judge response — kept verbatim for audit. */
   rawJudgeResponse: string;
   createdAt: number;
 }

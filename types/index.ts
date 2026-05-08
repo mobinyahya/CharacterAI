@@ -422,4 +422,161 @@ export interface StaticEvaluationReport {
   /** Raw judge response — kept verbatim for audit. */
   rawJudgeResponse: string;
   createdAt: number;
+
+  // ---- v2/v3 layers (optional in storage so legacy reports continue to load) ----
+
+  /** v3 §5 coverage map — 13 content surfaces the card should hit. */
+  coverage?: StaticCoverageResult[];
+  /** v3 §6 + v2 waterfall — backstory↔behavior, timeline, capital↔fears, etc. */
+  coherence?: StaticCoherenceFinding[];
+  /** v3 §7 adversarial critique — trope / thinness / evidence / unexplored lenses. */
+  adversarial?: StaticAdversarialFinding[];
+  /**
+   * v2/v3 punchlist — unified, severity-ranked findings derived from sub-4
+   * scores + coverage gaps + coherence breaks + adversarial critiques + flag
+   * taxonomy. This is the primary creator-facing deliverable per v3.
+   */
+  findings?: PunchlistFinding[];
+}
+
+// ---------- v3 §5 Coverage layer ----------
+// 13 content-surface dimensions, each scored on a 4-step presence ladder with
+// verbatim card quotes and a latchability cross-cut (v3 §8).
+
+export type CoverageDimId =
+  | "identity-physical" //   5.A.1 — name/age/gender/origin + height/build/distinguishing
+  | "backstory-causal" //    5.A.2 — formative events with explicit causal reasoning
+  | "relationships" //       5.A.3 — immediate group + family with named roles
+  | "capital" //             5.A.4 — at least one elite dimension, manifested
+  | "faults" //              5.B.1 — concrete faults with stakes (not "perfectionist")
+  | "behavior-settings" //   5.B.2 — behavior across ≥3 distinct settings
+  | "signals" //             5.B.3 — attractional + repulsional signals (orthogonal)
+  | "mannerisms" //          5.B.4 — surface tics & habits
+  | "speech-described" //    5.C.1 — register, idioms, sentence-length tendency
+  | "speech-examples" //     5.C.2 — ≥2 verbatim example utterances
+  | "vulnerability" //       5.D.1 — fears/secrets coherent with backstory + capital
+  | "user-relationship" //   5.E.1 — character↔user state + history
+  | "sexuality"; //          5.F.1 — NSFW only, evaluated when card opts in
+
+export type StaticCoveragePresence =
+  | "rich"
+  | "adequate"
+  | "thin"
+  | "missing"
+  | "na"; // NSFW dim on non-NSFW cards.
+
+export type StaticLatchability = "high" | "medium" | "low";
+
+export interface StaticCoverageResult {
+  id: CoverageDimId;
+  presence: StaticCoveragePresence;
+  /** Verbatim snippets from the card. Empty when missing. */
+  evidence: string[];
+  /** 1–2 sentence judge note explaining the presence rating. */
+  notes: string;
+  /**
+   * Would a competent renderer have enough handles here for distinct rendering?
+   * Low latchability ≠ absent — a card can check the box while being too thin.
+   */
+  latchability: StaticLatchability;
+  /**
+   * Architectural dim id this coverage check primarily supports, or null when
+   * the surface is standalone (capital, relationships, signals, sexuality).
+   * Lets the UI fold coverage into the right dim card.
+   */
+  mapsTo: StaticDimId | null;
+}
+
+// ---------- v3 §6 Coherence layer (the waterfall) ----------
+
+export type StaticCoherenceLinkType =
+  | "backstory-behavior" //    each present-state claim should reach a backstory event
+  | "timeline" //              age vs. backstory event chronology
+  | "capital-vulnerability" // §6.4 — fears reference capital position
+  | "build-lifestyle" //       §6.3 — athletic build needs an active life
+  | "build-capital" //         §6.3 — physical capital must be manifested
+  | "origin-voice" //          §6.3 — class/region cohere with speech & mannerisms
+  | "internal-contradiction"; // §6.5 — direct contradictions
+
+export type StaticCoherenceClassification =
+  | "coherent"
+  | "explained_divergence"
+  | "unexplained_divergence";
+
+export interface StaticCoherenceFinding {
+  type: StaticCoherenceLinkType;
+  classification: StaticCoherenceClassification;
+  /** What the link is about (1 sentence). */
+  what: string;
+  /**
+   * The two card passages being linked (e.g. backstory event + present
+   * behavior, or both sides of a contradiction). Verbatim only.
+   */
+  evidence: { label: string; quote: string }[];
+  /**
+   * Two options for unexplained divergences per v3 §6.2: add-bridge vs.
+   * revise-claim. Empty for coherent; one entry for explained.
+   */
+  options?: string[];
+}
+
+// ---------- v3 §7 Adversarial layer ----------
+
+export type StaticAdversarialLens =
+  | "trope" //       stock-character shortcuts, unearned archetypes
+  | "thinness" //    claims too abstract for a model to grab onto
+  | "evidence" //    claims without anecdote / example / manifestation
+  | "unexplored"; // dimensions of life the card never touches
+
+export interface StaticAdversarialFinding {
+  lens: StaticAdversarialLens;
+  /** 1–2 sentence critique. */
+  critique: string;
+  /** Verbatim card passage, or empty when the critique is about absence. */
+  quote: string;
+  severity: PunchlistSeverity;
+  /** Concrete fix. */
+  suggestion: string;
+}
+
+// ---------- v2 + v3 Punchlist (primary deliverable) ----------
+
+export type PunchlistSeverity = "critical" | "major" | "minor";
+export type PunchlistSource =
+  | "score" //        sub-4 architectural dim
+  | "coverage" //     missing/thin coverage surface
+  | "coherence" //    unexplained divergence or contradiction
+  | "adversarial" // critic-pass critique
+  | "flag"; //        rule-taxonomy flag (existing)
+export type PunchlistSuggestionKind = "add" | "revise" | "remove";
+
+export interface PunchlistSuggestion {
+  kind: PunchlistSuggestionKind;
+  /** Card section name or verbatim passage to edit. */
+  target?: string;
+  /** Concrete proposed text — never vague advice. */
+  proposedChange: string;
+}
+
+export interface PunchlistFinding {
+  /**
+   * Stable id derived from (source, dimension, evidence-prefix). Survives
+   * card edits that don't touch the offending passage, so iteration runs can
+   * report resolved / persistent / new across re-runs.
+   */
+  id: string;
+  source: PunchlistSource;
+  severity: PunchlistSeverity;
+  /**
+   * Architectural dim id (`structure`/`states`/…) when relevant, or a
+   * coverage / coherence / adversarial label otherwise.
+   */
+  dimension: string;
+  /** What's wrong (1 sentence). */
+  what: string;
+  /** Verbatim card quotes, or "no such passage exists" sentinel. */
+  evidence: { quote: string; location?: string }[];
+  /** Why it matters (1–2 sentences). */
+  why: string;
+  suggestion: PunchlistSuggestion;
 }

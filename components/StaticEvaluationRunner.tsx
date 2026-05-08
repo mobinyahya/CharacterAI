@@ -306,20 +306,55 @@ function ConfigurePhase({
             <div className="rounded-md border border-border/60 bg-card/40 p-3 text-[11px] text-muted-foreground">
               <div className="mb-1 flex items-center gap-1.5 font-medium text-foreground/80">
                 <ScrollText className="h-3 w-3" />
-                What gets scored
+                What the audit produces
               </div>
-              <ul className="grid grid-cols-2 gap-x-3 gap-y-0.5">
-                <li>1. Structure</li>
-                <li>2. States &amp; contract</li>
-                <li>3. Voice</li>
-                <li>4. Self-gap (Open only)</li>
-                <li>5. Worldview</li>
-                <li>6. Individuation</li>
-              </ul>
-              <p className="mt-2">
-                Plus card-shape detection (Open / Trajectory / Closed), spine extraction,
-                flag taxonomy, and gating verdict.
-              </p>
+              <div className="space-y-2">
+                <div>
+                  <span className="text-foreground/80 font-medium">
+                    Architecture · 6 dims (0–5):
+                  </span>
+                  <ul className="mt-0.5 grid grid-cols-2 gap-x-3 gap-y-0.5">
+                    <li>1. Structure</li>
+                    <li>2. States &amp; contract</li>
+                    <li>3. Voice</li>
+                    <li>4. Self-gap (Open only)</li>
+                    <li>5. Worldview</li>
+                    <li>6. Individuation</li>
+                  </ul>
+                </div>
+                <div>
+                  <span className="text-foreground/80 font-medium">
+                    Coverage · 13 surfaces:
+                  </span>{" "}
+                  identity, backstory, relationships, capital, faults,
+                  behavior settings, signals, mannerisms, speech, examples,
+                  vulnerability, user-relationship, sexuality (NSFW only).
+                  Each as presence + verbatim evidence + latchability.
+                </div>
+                <div>
+                  <span className="text-foreground/80 font-medium">
+                    Coherence:
+                  </span>{" "}
+                  backstory ↔ behavior waterfall, age timeline, capital ↔
+                  fears, build / origin / voice cross-checks, internal
+                  contradictions.
+                </div>
+                <div>
+                  <span className="text-foreground/80 font-medium">
+                    Adversarial:
+                  </span>{" "}
+                  trope inspector, thinness auditor, evidence auditor,
+                  unexplored-dimension auditor.
+                </div>
+                <div>
+                  <span className="text-foreground/80 font-medium">
+                    Plus:
+                  </span>{" "}
+                  card shape (Open / Trajectory / Closed), spine, gating
+                  verdict, rule-taxonomy flags, and a severity-ranked
+                  punchlist with stable IDs for diff-across-runs.
+                </div>
+              </div>
             </div>
 
             {!hasKey && (
